@@ -120,16 +120,24 @@ async def test_direct_specialists_preserve_images_and_smaller_limits(monkeypatch
 
 
 @pytest.mark.parametrize("quota", [False, True])
-async def test_direct_probe_checks_real_contract_and_redacts_failure(monkeypatch, quota):
+@pytest.mark.parametrize("source_failure", [False, True])
+async def test_direct_probe_checks_real_contract_and_redacts_failure(monkeypatch, quota, source_failure):
     import json
 
-    from app import model_readiness
+    from app import material_relevance, model_readiness
 
     async def parse(**kwargs):
-        assert kwargs["max_output_tokens"] == 2048
         assert kwargs["store"] is False and "tools" not in kwargs
         if quota:
             raise RuntimeError("insufficient_quota private account sk-secret")
+        if kwargs["text_format"] is material_relevance.PassageSelections:
+            evidence = json.loads(kwargs["input"])["evidence"]
+            assert len(evidence) == 2 and "passages" in evidence[0]
+            return NS(output_parsed=material_relevance.PassageSelections(assessments=[
+                {"candidate_id": doc["id"], "relevant": doc["id"] == "notes" and not source_failure,
+                 "reason": "Synthetic check", "passage_indices": [0] if doc["id"] == "notes" and not source_failure else []}
+                for doc in evidence]))
+        assert kwargs["max_output_tokens"] == 2048
         return NS(output_parsed=kwargs["text_format"].model_validate(json.loads(kwargs["input"])))
 
     class Client:
@@ -143,8 +151,11 @@ async def test_direct_probe_checks_real_contract_and_redacts_failure(monkeypatch
         return Client()
 
     monkeypatch.setattr(model_readiness, "AsyncOpenAI", client)
+    monkeypatch.setattr(material_relevance, "AsyncOpenAI", client)
     result = await model_readiness.probe_direct_model()
-    assert result["ready"] is (not quota)
+    assert result["ready"] is (not quota and not source_failure)
     assert "private" not in str(result) and "sk-secret" not in str(result)
     if quota:
         assert result["quota_exhausted"] is True
+    else:
+        assert result["source_review"] is (not source_failure)

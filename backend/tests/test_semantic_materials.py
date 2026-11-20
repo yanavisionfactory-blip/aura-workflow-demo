@@ -116,14 +116,14 @@ async def test_path_discovery_reads_and_semantically_selects_actual_contents(mon
         identifier = urlsplit(target).path.split("/")[-2]
         return contents[identifier].encode()
 
-    async def assess(goal, documents):
+    async def infer(goal, documents, schema, instruction):
         assert goal == GOAL
-        assert {doc["id"]: doc["text"] for doc in documents} == contents
-        return {identifier: material_relevance.IdentifiedAssessment(candidate_id=identifier,
+        assert {doc["id"]: "".join(doc["passages"].values()) for doc in documents} == contents
+        return schema(assessments=[material_relevance.PassageSelection(candidate_id=identifier,
             relevant=identifier == "useful", reason="Context reviewed",
-            excerpts=[text] if identifier == "useful" else []) for identifier, text in contents.items()}
+            passage_indices=[0] if identifier == "useful" else []) for identifier in contents])
 
-    monkeypatch.setattr(drive_materials, "assess_materials", assess)
+    monkeypatch.setattr(material_relevance, "_infer", infer)
     broker = Broker(respond)
     result = await drive_materials.execute(broker, "owner", "selected-account", {
         "semantic_goal": GOAL, "folder_path": [" ChatGPT on the goooo! 💖 ", "Brisa Studio"]})
@@ -182,16 +182,99 @@ async def test_revoked_account_does_not_read_or_invoke_model():
     assert not broker.calls
 
 
-async def test_semantic_excerpts_must_be_exact_and_cover_all_reviewed_ids(monkeypatch):
-    fake = material_relevance.MaterialAssessments(assessments=[
-        material_relevance.IdentifiedAssessment(candidate_id="known", relevant=True,
-            reason="Useful", excerpts=["Invented commercial license"])])
-    monkeypatch.setattr(material_relevance, "_infer", AsyncMock(return_value=fake))
-    with pytest.raises(ValueError, match="unverified"):
+@pytest.mark.parametrize("candidate,relevant,indices,message", [
+    ("known", True, [7], "invalid source passages"),
+    ("known", True, [], "invalid source passages"),
+    ("known", False, [0], "invalid source passages"),
+    ("known", True, [0, 0], "invalid source passages"),
+    ("other-account-document", True, [0], "exactly"),
+])
+async def test_semantic_review_rejects_invalid_references_after_one_repair(
+    monkeypatch, candidate, relevant, indices, message,
+):
+    fake = material_relevance.PassageSelections(assessments=[
+        material_relevance.PassageSelection(candidate_id=candidate, relevant=relevant,
+            reason="Useful", passage_indices=indices)])
+    infer = AsyncMock(return_value=fake)
+    monkeypatch.setattr(material_relevance, "_infer", infer)
+    with pytest.raises(ValueError, match=message):
         await material_relevance.assess_materials(GOAL, [{"id": "known", "text": "License unconfirmed"}])
-    fake.assessments[0].candidate_id = "other-account-document"
-    with pytest.raises(ValueError, match="exactly"):
+    assert infer.await_count == 2
+
+
+async def test_semantic_selection_resolves_original_unicode_and_line_endings(monkeypatch):
+    text = ("Música ambiente — para pequenos cafés.\r\n" * 16
+            + "Uso\u00a0comercial ainda não confirmado; rever a licença.\n")
+    originals = {"notes": text, "decoy": "AI music restaurants. Unrelated keyword list."}
+
+    async def infer(goal, documents, schema, instruction):
+        assert {doc["id"]: "".join(doc["passages"].values()) for doc in documents} == originals
+        notes = next(doc for doc in documents if doc["id"] == "notes")
+        last = len(notes["passages"]) - 1
+        return schema(assessments=[
+            {"candidate_id": "notes", "relevant": True, "reason": "Project and rights uncertainty",
+             "passage_indices": [last, 0]},
+            {"candidate_id": "decoy", "relevant": False, "reason": "Only repeated words",
+             "passage_indices": []}])
+
+    monkeypatch.setattr(material_relevance, "_infer", infer)
+    result = await material_relevance.assess_materials(GOAL, [
+        {"id": identifier, "text": value} for identifier, value in originals.items()])
+    assert all(excerpt in text and len(excerpt) <= 180 for excerpt in result["notes"].excerpts)
+    assert "\r\n" in result["notes"].excerpts[0]
+    assert "Uso\u00a0comercial ainda não confirmado" in result["notes"].excerpts[-1]
+    assert result["decoy"].relevant is False and result["decoy"].excerpts == []
+
+
+async def test_semantic_invalid_selection_repairs_references_without_rereading(monkeypatch):
+    def selection(indices):
+        return material_relevance.PassageSelections(assessments=[
+            material_relevance.PassageSelection(candidate_id="known", relevant=True,
+                reason="Source facts", passage_indices=indices)])
+    infer = AsyncMock(side_effect=[selection([99]), selection([0])])
+    monkeypatch.setattr(material_relevance, "_infer", infer)
+    result = await material_relevance.assess_materials(GOAL, [{"id": "known", "text": "License unconfirmed"}])
+    assert result["known"].excerpts == ["License unconfirmed"]
+    assert infer.call_args_list[0].args[1] == infer.call_args_list[1].args[1]
+    assert "previous selection" in infer.call_args_list[1].args[3]
+
+
+async def test_semantic_provider_failure_is_not_retried_as_bad_references(monkeypatch):
+    infer = AsyncMock(side_effect=RuntimeError("usage_limit_exceeded"))
+    monkeypatch.setattr(material_relevance, "_infer", infer)
+    with pytest.raises(RuntimeError, match="usage_limit_exceeded"):
         await material_relevance.assess_materials(GOAL, [{"id": "known", "text": "License unconfirmed"}])
+    infer.assert_awaited_once()
+
+
+async def test_twelve_document_review_repairs_missing_coverage_and_keeps_exact_sources(monkeypatch):
+    documents = [{"id": f"doc_{index}", "text": f"Source {index}: commercial rights remain unconfirmed."}
+                 for index in range(12)]
+    complete = material_relevance.PassageSelections(assessments=[
+        material_relevance.PassageSelection(candidate_id=doc["id"], relevant=True,
+            reason="Rights qualification", passage_indices=[0]) for doc in documents])
+    partial = material_relevance.PassageSelections(assessments=complete.assessments[:-1])
+    infer = AsyncMock(side_effect=[partial, complete])
+    monkeypatch.setattr(material_relevance, "_infer", infer)
+    result = await material_relevance.assess_materials(GOAL, documents)
+    assert {key: value.excerpts for key, value in result.items()} == {
+        doc["id"]: [doc["text"]] for doc in documents}
+    assert infer.await_count == 2
+
+
+def test_model_cannot_supply_generated_quotes_as_source_evidence():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        material_relevance.PassageSelection(candidate_id="known", relevant=True, reason="Claim",
+            passage_indices=[0], excerpts=["Invented commercial license"])
+
+
+@pytest.mark.parametrize("text", ["", "a" * 601, "音楽と権利。" * 120, "\r\n\t\u00a0" * 200])
+def test_source_partition_is_lossless_and_bounded(text):
+    passages = material_relevance._source_passages(text)
+    assert "".join(passages) == text
+    assert all(0 < len(part) <= 180 for part in passages)
 
 
 async def test_populated_slides_are_one_write_and_read_back_exactly(monkeypatch):

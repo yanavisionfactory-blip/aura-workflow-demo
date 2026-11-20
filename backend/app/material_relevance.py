@@ -41,9 +41,17 @@ class IdentifiedAssessment(MaterialAssessment):
     candidate_id: str
 
 
-class MaterialAssessments(BaseModel):
+class PassageSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    assessments: list[IdentifiedAssessment] = Field(min_length=1, max_length=20)
+    candidate_id: str
+    relevant: bool
+    reason: str = Field(min_length=1, max_length=500)
+    passage_indices: list[Annotated[int, Field(strict=True, ge=0)]] = Field(max_length=6)
+
+
+class PassageSelections(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    assessments: list[PassageSelection] = Field(min_length=1, max_length=20)
 
 
 async def _infer(goal, evidence, schema, instruction):
@@ -117,42 +125,79 @@ def _evidence_batches(goal, evidence):
 
 
 async def assess_material(goal, title, text):
-    assessment = await _infer(goal, {"title": title, "text": text}, MaterialAssessment,
-        "Read all supplied content before deciding whether it provides substantive evidence for "
-        "the objective. A repeated keyword or similar title is insufficient. An indirect description, "
-        "synonym or different language can establish relevance. For relevant material, select exact "
-        "verbatim excerpts covering the useful facts, constraints and uncertainties across the whole "
-        "text. Preserve licensing qualifications. Never infer copyright clearance from AI generation. "
-        "For irrelevant content return relevant=false and no excerpts. State a short reason.")
-    if (assessment.relevant and not assessment.excerpts) or any(
-        excerpt not in text for excerpt in assessment.excerpts
-    ):
-        raise ValueError("Source relevance lacks verifiable content evidence")
-    if not assessment.relevant and assessment.excerpts:
-        raise ValueError("Unrelated source cannot contribute evidence excerpts")
-    return assessment
+    reviewed = await assess_materials(goal, [{"id": "document", "title": title, "text": text}])
+    return MaterialAssessment.model_validate(reviewed["document"].model_dump(exclude={"candidate_id"}))
+
+
+def _source_passages(text):
+    """Partition without changing or dropping characters; excerpts stay exact."""
+    passages, start = [], 0
+    while start < len(text):
+        end = min(start + 180, len(text))
+        if end < len(text):
+            boundary = max(text.rfind(separator, start + 120, end) for separator in (" ", "\n", "\t"))
+            if boundary >= 0:
+                end = boundary + 1
+        passages.append(text[start:end])
+        start = end
+    return passages
+
+
+def _resolve_passages(result, batch):
+    by_id = {doc["id"]: doc for doc in batch}
+    if (len(result.assessments) != len(by_id)
+            or {item.candidate_id for item in result.assessments} != by_id.keys()):
+        raise ValueError("Semantic review did not cover exactly the documents read")
+    reviewed = {}
+    for item in result.assessments:
+        passages = by_id[item.candidate_id]["passages"]
+        indices = item.passage_indices
+        if (item.relevant != bool(indices) or len(indices) != len(set(indices))
+                or any(type(index) is not int or not 0 <= index < len(passages) for index in indices)):
+            raise ValueError("Semantic review referenced invalid source passages")
+        # The model selects references, never writes quoted evidence. Ordering
+        # follows the source so qualifications keep their original context.
+        reviewed[item.candidate_id] = IdentifiedAssessment(candidate_id=item.candidate_id,
+            relevant=item.relevant, reason=item.reason,
+            excerpts=[passages[str(index)] for index in sorted(indices)])
+    return reviewed
 
 
 async def assess_materials(goal, documents):
-    """Batch complete contents; never trim text to make a model call fit."""
+    """Select source passages by meaning and resolve quotations locally."""
+    if len({doc["id"] for doc in documents}) != len(documents):
+        raise ValueError("Source review requires distinct document identities")
+    evidence = [{key: value for key, value in doc.items() if key != "text"}
+                | {"passages": {str(index): text for index, text in enumerate(_source_passages(doc["text"]))}}
+                for doc in documents]
     results = {}
-    for batch in _evidence_batches(goal, documents):
-        result = await _infer(goal, batch, MaterialAssessments,
-            "Read every document's complete text. Return exactly one assessment per supplied ID. "
+    for batch in _evidence_batches(goal, evidence):
+        instruction = (
+            "Each document's passages object labels every passage with its zero-based index. "
+            "Together they contain its complete text in original order, without omissions. "
+            "Read all passages. Return exactly one assessment per supplied document ID. "
             "Select by substantive meaning, not keyword overlap or matching names. Indirect "
             "descriptions and other languages can be relevant. Repeated keywords without useful "
-            "project evidence are not relevant. For each relevant document choose exact verbatim "
-            "passages covering its useful facts, constraints, and uncertainties throughout the text. "
-            "Use up to six exact excerpts, each at most 180 characters. "
-            "Preserve rights qualifications. For irrelevant documents give a reason and no excerpts.")
-        by_id = {doc["id"]: doc for doc in batch}
-        if (len(result.assessments) != len(by_id)
-                or {a.candidate_id for a in result.assessments} != by_id.keys()):
-            raise ValueError("Semantic review did not cover exactly the documents read")
-        for assessment in result.assessments:
-            text = by_id[assessment.candidate_id]["text"]
-            if (assessment.relevant != bool(assessment.excerpts)
-                    or any(excerpt not in text for excerpt in assessment.excerpts)):
-                raise ValueError("Semantic review contains unverified source excerpts")
-            results[assessment.candidate_id] = assessment
+            "project evidence are not relevant. For relevant documents choose one to six distinct "
+            "zero-based passage_indices from that document's labeled passages, covering useful facts, "
+            "constraints and uncertainties across the text. Select adjacent passages when needed "
+            "to preserve context and rights qualifications. Never infer copyright clearance from AI "
+            "generation. Do not copy, paraphrase or translate quotations; AURA resolves the chosen "
+            "indices to original text. For irrelevant documents give a reason and passage_indices=[].")
+        for attempt in range(2):
+            result = await _infer(goal, batch, PassageSelections, instruction)
+            try:
+                resolved = _resolve_passages(result, batch)
+            except ValueError:
+                if attempt:
+                    raise
+                # One bounded repair of references only. API, quota and input
+                # limit errors propagate directly; sources are never reread.
+                instruction += (" The previous selection had invalid document coverage or passage references. "
+                    "Use every supplied document ID exactly once and only valid zero-based indices "
+                    "from that same document. Relevant documents require at least one index; "
+                    "irrelevant documents require an empty list.")
+            else:
+                results.update(resolved)
+                break
     return results
