@@ -7,8 +7,14 @@ from fastapi import FastAPI, HTTPException
 from app.config import get_settings
 from app.db import session_dependency
 from app.models import (
-    AuditEvent, CapabilityManifest, RunStatus, TenantMembership, ToolConnection,
-    ToolKind, WorkflowRun, Workspace,
+    AuditEvent,
+    CapabilityManifest,
+    RunStatus,
+    TenantMembership,
+    ToolConnection,
+    ToolKind,
+    WorkflowRun,
+    Workspace,
 )
 from app.platform_usage import install_usage_routes, observe_session, usage_report
 

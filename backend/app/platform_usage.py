@@ -15,8 +15,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .config import get_settings
 from .db import session_dependency, set_tenant_context
 from .models import (
-    AuditEvent, CapabilityManifest, TenantMembership, ToolConnection,
-    UsageSession, WorkflowRun, Workspace,
+    AuditEvent,
+    CapabilityManifest,
+    TenantMembership,
+    ToolConnection,
+    UsageSession,
+    WorkflowRun,
+    Workspace,
 )
 
 CONNECTION_EVENTS = (

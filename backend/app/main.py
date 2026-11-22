@@ -63,7 +63,6 @@ from .connector_sdk import ConnectorSDKError, validate_connector_definition
 from .db import SessionLocal, engine, session_dependency, set_tenant_context
 from .dispatch import dispatch_pending, recovery_loop
 from .identity import IdentityError, organization_claims, verify_clerk_session
-from .platform_usage import install_usage_routes, may_read_usage
 from .logging_privacy import protect_access_logs
 from .managed_connectors import (
     ConnectorConfigurationError,
@@ -157,6 +156,7 @@ from .pipedream_connect import (
 from .pipedream_connect import (
     released_pack as released_pipedream_pack,
 )
+from .platform_usage import install_usage_routes, may_read_usage
 from .policy import (
     DEFAULT_POLICY,
     TENANT_OVERRIDABLE_POLICY_KEYS,
