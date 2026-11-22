@@ -4,10 +4,11 @@ from collections import Counter, defaultdict
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +20,7 @@ from .models import (
     CapabilityManifest,
     TenantMembership,
     ToolConnection,
+    UsageProfile,
     UsageSession,
     WorkflowRun,
     Workspace,
@@ -30,6 +32,8 @@ CONNECTION_EVENTS = (
     "connector.managed_authorized", "connector.meta_direct_connected",
     "connector.shopify_verified", "connector.wordpress_plugin_connected",
 )
+REPORT_TIMEZONE = ZoneInfo("America/Chicago")
+RETENTION_DAYS = (1, 7, 14, 30)
 
 
 def may_read_usage(claims: dict) -> bool:
@@ -41,9 +45,12 @@ def may_read_usage(claims: dict) -> bool:
 
 class SessionObservation(BaseModel):
     display_name: str = Field(default="", max_length=160)
+    email: str = Field(default="", max_length=320)
+    joined: datetime | None = None
+    last_sign_in: datetime | None = None
 
 
-async def observe_session(db, workspace_id, subject, session_id, display_name):
+async def observe_session(db, workspace_id, subject, session_id, display_name, profile=None):
     now = datetime.now(UTC)
     digest = sha256(f"{subject}\0{session_id}".encode()).hexdigest()
     insert = postgres_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
@@ -56,6 +63,33 @@ async def observe_session(db, workspace_id, subject, session_id, display_name):
         set_={"last_seen": now, "display_name": statement.excluded.display_name},
         where=UsageSession.last_seen <= now,
     ))
+    if profile and profile.joined and _utc(profile.joined) <= now:
+        joined = _utc(profile.joined)
+        signed = _utc(profile.last_sign_in) if profile.last_sign_in else None
+        signed_day = signed.astimezone(REPORT_TIMEZONE).date() if signed and joined <= signed <= now else None
+        snapshot = insert(UsageProfile).values(
+            workspace_id=workspace_id, subject=subject, email=profile.email.strip(),
+            joined=joined.astimezone(REPORT_TIMEZONE).date(), last_sign_in=signed_day, observed_at=now,
+        )
+        latest = snapshot.excluded
+        await db.execute(snapshot.on_conflict_do_update(
+            index_elements=[UsageProfile.workspace_id, UsageProfile.subject],
+            set_={
+                "last_sign_in": case(
+                    (UsageProfile.last_sign_in.is_(None), latest.last_sign_in),
+                    (latest.last_sign_in > UsageProfile.last_sign_in, latest.last_sign_in),
+                    else_=UsageProfile.last_sign_in,
+                ),
+                "email": case(
+                    ((latest.observed_at >= UsageProfile.observed_at) & (latest.email != ""), latest.email),
+                    else_=UsageProfile.email,
+                ),
+                "observed_at": case(
+                    (latest.observed_at > UsageProfile.observed_at, latest.observed_at),
+                    else_=UsageProfile.observed_at,
+                ),
+            },
+        ))
     await db.commit()
 
 
@@ -67,10 +101,32 @@ def _utc(value):
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
+def retention_outcomes(joined, last_sign_in, today):
+    outcomes = {}
+    for days in RETENTION_DAYS:
+        if joined is None or joined > today:
+            state = "unknown"
+        elif (today - joined).days < days:
+            state = "too_new"
+        elif last_sign_in and joined <= last_sign_in <= today and (last_sign_in - joined).days >= days:
+            state = "retained"
+        else:
+            state = "no_return"
+        outcomes[days] = state
+    return outcomes
+
+
 async def usage_report(db: AsyncSession, days: int | None) -> dict:
     now = datetime.now(UTC)
     since = now - timedelta(days=days) if days else None
     accounts = defaultdict(_account)
+    directory = get_settings().platform_usage_retention_seed
+    profiles = {}
+    last_sign_ins = {}
+    for subject, entry in directory.items():
+        accounts[subject]
+        if entry.last_sign_in:
+            last_sign_ins[subject] = entry.last_sign_in
     statuses, providers = Counter(), Counter()
     run_total = unassigned_runs = unassigned_connections = 0
     first_observed = None
@@ -84,6 +140,14 @@ async def usage_report(db: AsyncSession, days: int | None) -> dict:
         for subject in members:
             if subject.startswith("user_"):
                 accounts[subject]
+
+        for profile in await db.scalars(select(UsageProfile).where(UsageProfile.workspace_id == wid)):
+            subject = profile.subject
+            accounts[subject]
+            if subject not in profiles or profile.observed_at > profiles[subject].observed_at:
+                profiles[subject] = profile
+            if profile.last_sign_in:
+                last_sign_ins[subject] = max(profile.last_sign_in, last_sign_ins.get(subject, profile.last_sign_in))
 
         sessions = await db.execute(select(
             UsageSession.subject, UsageSession.session_hash, UsageSession.display_name,
@@ -140,12 +204,22 @@ async def usage_report(db: AsyncSession, days: int | None) -> dict:
             else:
                 unassigned_connections += 1
 
-    users = [{
-        "user_id": subject, "display_name": account["display_name"],
-        "sessions": len(account["sessions"]), "last_seen": account["last_seen"],
-        "runs": account["runs"], "completed": account["completed"], "tools": sorted(account["tools"]),
-    } for subject, account in accounts.items()]
+    today = now.astimezone(REPORT_TIMEZONE).date()
+    users = []
+    for subject, account in accounts.items():
+        seed, live = directory.get(subject), profiles.get(subject)
+        joined = seed.joined if seed else live.joined if live else None
+        signed = last_sign_ins.get(subject)
+        users.append({
+            "user_id": subject, "display_name": account["display_name"] or (seed.name if seed else ""),
+            "email": (seed.email if seed else "") or (live.email if live else ""),
+            "internal": bool(seed and seed.internal), "joined": joined, "last_sign_in": signed,
+            "retention": retention_outcomes(joined, signed, today),
+            "sessions": len(account["sessions"]), "last_seen": account["last_seen"],
+            "runs": account["runs"], "completed": account["completed"], "tools": sorted(account["tools"]),
+        })
     return {
+        "retention_available": True,
         "as_of": now, "since": since, "first_observed": first_observed,
         "total_users": len(users), "active_users": sum(row["sessions"] > 0 for row in users),
         "sessions": sum(row["sessions"] for row in users), "workspaces": len(workspace_ids),
@@ -165,7 +239,7 @@ def install_usage_routes(app, clerk_identity, tenant_context, tenant_session):
         if not context.session_id or not context.subject.startswith("user_"):
             raise HTTPException(403, "A signed-in user session is required")
         await observe_session(db, context.workspace_id, context.subject,
-                              context.session_id, payload.display_name)
+                              context.session_id, payload.display_name, payload)
         return Response(status_code=204)
 
     @app.get("/v1/admin/usage")

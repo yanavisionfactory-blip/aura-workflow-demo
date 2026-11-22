@@ -10,20 +10,93 @@ const dateTime = (value) => value ? new Date(value).toLocaleString(undefined, {
   dateStyle: "medium", timeStyle: "short",
 }) : "No session observed";
 
-function UsersTable({ users }) {
+const control = "rounded-lg border border-white/15 bg-slate-950 px-3 py-2 text-sm";
+const retentionLabels = {
+  retained: "Retained", no_return: "No return recorded", too_new: "Too new", unknown: "Signup date unavailable",
+};
+const retentionColors = {
+  retained: "text-emerald-300", no_return: "text-amber-200", too_new: "text-sky-300", unknown: "text-slate-400",
+};
+const calendarDate = (value) => value
+  ? new Date(value + "T12:00:00Z").toLocaleDateString(undefined, { dateStyle: "medium", timeZone: "UTC" }) : "—";
+
+function Identity({ row }) {
+  return <>
+    <span className="block font-medium">{row.display_name || row.email || row.user_id}</span>
+    {row.email && row.display_name && <span className="block text-xs text-slate-300">{row.email}</span>}
+    {(row.display_name || row.email) && <span className="block break-all font-mono text-xs text-slate-400">{row.user_id}</span>}
+  </>;
+}
+
+function Retention({ users }) {
+  const [day, setDay] = useState(7);
+  const [cohort, setCohort] = useState("all");
+  const [status, setStatus] = useState("all");
+  const accounts = users.filter((row) => cohort === "all" || !row.internal);
+  const matching = accounts.filter((row) => status === "all" || row.retention[day] === status);
+  return <section aria-labelledby="retention-title" className={`${panel} p-5`}>
+    <div className="flex flex-wrap items-start justify-between gap-4">
+      <div><h2 id="retention-title" className="text-xl font-semibold">Sign-in retention</h2>
+        <p className="mt-1 max-w-2xl text-sm text-slate-300">An account is retained if it signed in on or after the selected day following signup.
+          Rates include only accounts old enough to qualify. Retention uses lifetime sign-in history and Chicago calendar dates.</p></div>
+      <label className="flex items-center gap-2 text-sm">Accounts
+        <select className={control} value={cohort} onChange={(e) => setCohort(e.target.value)}>
+          <option value="all">All accounts</option><option value="external">Exclude internal accounts</option>
+        </select>
+      </label>
+    </div>
+    <div role="group" aria-label="Retention milestone" className="my-5 grid grid-cols-2 gap-2 md:grid-cols-4">
+      {[1, 7, 14, 30].map((days) => {
+        const retained = accounts.filter((row) => row.retention[days] === "retained").length;
+        const eligible = retained + accounts.filter((row) => row.retention[days] === "no_return").length;
+        return <button key={days} aria-pressed={day === days} onClick={() => setDay(days)}
+          className={`rounded-xl border p-3 text-left ${day === days ? "border-violet-400 bg-violet-400/10" : "border-white/15 hover:bg-white/5"}`}>
+          <span className="block text-sm text-slate-300">Day {days}+</span>
+          <strong className="mt-1 block text-2xl tabular-nums">{eligible ? `${Math.round(100 * retained / eligible)}%` : "—"}</strong>
+          <span className="block text-xs text-slate-300">{eligible ? `${retained} of ${eligible} eligible retained` : "No eligible accounts"}</span>
+        </button>;
+      })}
+    </div>
+    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+      <h3 className="font-medium">Day {day}+ by account</h3>
+      <label className="flex items-center gap-2 text-sm">Result
+        <select className={control} value={status} onChange={(e) => setStatus(e.target.value)}>
+          <option value="all">All results</option>{Object.entries(retentionLabels).map(([key, value]) =>
+            <option key={key} value={key}>{value}</option>)}
+        </select>
+      </label>
+    </div>
+    <div className="overflow-x-auto"><table className="w-full text-left text-sm">
+      <thead className="text-slate-300"><tr>{["Account", "Signed up", "Last sign-in", `Day ${day}+ result`].map((heading) =>
+        <th key={heading} scope="col" className="whitespace-nowrap bg-white/5 px-3 py-2 font-medium">{heading}</th>)}</tr></thead>
+      <tbody>{matching.map((row) =>
+        <tr key={row.user_id} className="border-t border-white/10">
+          <th scope="row" className="px-3 py-2 text-left font-normal"><Identity row={row} /></th>
+          <td className="whitespace-nowrap px-3 py-2">{calendarDate(row.joined)}</td>
+          <td className="whitespace-nowrap px-3 py-2">{calendarDate(row.last_sign_in)}</td>
+          <td className={`whitespace-nowrap px-3 py-2 ${retentionColors[row.retention[day]]}`}>{retentionLabels[row.retention[day]]}</td>
+        </tr>)}</tbody>
+    </table></div>
+    {!matching.length && <p className="mt-3 text-sm text-slate-300">No accounts match this selection.</p>}
+  </section>;
+}
+
+function UsersTable({ users, activeOnly, setActiveOnly }) {
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(0);
   const needle = query.trim().toLowerCase();
-  const matches = users.filter((row) =>
-    [row.user_id, row.display_name, ...row.tools].some((text) => text.toLowerCase().includes(needle)));
+  const matches = users.filter((row) => (!activeOnly || row.sessions > 0) &&
+    [row.user_id, row.display_name, row.email || "", ...row.tools].some((text) => text.toLowerCase().includes(needle)));
   const last = Math.max(0, Math.ceil(matches.length / 20) - 1);
   const current = Math.min(page, last);
 
-  return <section className={panel}>
+  return <section id="usage-accounts" className={panel}>
     <div className="flex flex-wrap items-center justify-between gap-3 p-5">
-      <h2 className="text-xl font-semibold">Users</h2>
-      <input type="search" aria-label="Search users by name, ID, or connected tool"
-        placeholder="Search name, ID, or tool" value={query}
+      <h2 className="text-xl font-semibold">{activeOnly ? "Active users" : "Users"}</h2>
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={activeOnly}
+        onChange={(e) => { setPage(0); setActiveOnly(e.target.checked); }} /> Active in selected period</label>
+      <input type="search" aria-label="Search users by name, email, ID, or connected tool"
+        placeholder="Search name, email, ID, or tool" value={query}
         onChange={(event) => { setQuery(event.target.value); setPage(0); }}
         className="max-w-full rounded-lg border border-white/15 bg-slate-950 px-3 py-2 text-sm" />
     </div>
@@ -34,8 +107,7 @@ function UsersTable({ users }) {
         <tbody>{matches.slice(current * 20, current * 20 + 20).map((row) =>
           <tr key={row.user_id} className="border-t border-white/5 align-top">
             <th scope="row" className="px-5 py-3 text-left font-medium">
-              {row.display_name && <span className="block">{row.display_name}</span>}
-              <span className="whitespace-nowrap font-mono text-xs text-slate-300">{row.user_id}</span>
+              <Identity row={row} />
             </th>
             <td className="px-5 py-3 tabular-nums">{number(row.sessions)}</td>
             <td className="px-5 py-3 tabular-nums">{number(row.runs)}</td>
@@ -45,7 +117,7 @@ function UsersTable({ users }) {
           </tr>)}</tbody>
       </table>
     </div>
-    {!matches.length && <p className="p-5 text-slate-300">{query ? "No users match this search." : "No users recorded."}</p>}
+    {!matches.length && <p className="p-5 text-slate-300">No users match this selection.</p>}
     {last > 0 && <div className="flex items-center justify-end gap-4 p-4 text-sm">
       <button disabled={current === 0} className="disabled:opacity-40" onClick={() => setPage(current - 1)}>Previous</button>
       <span>Page {current + 1} of {last + 1}</span>
@@ -66,6 +138,7 @@ function Breakdown({ title, items, empty, note }) {
 }
 
 function UsageResults({ report }) {
+  const [activeOnly, setActiveOnly] = useState(false);
   const metrics = [
     ["Users", report.total_users, "Known AURA accounts"],
     ["Active users", report.active_users, "With an observed session in period"],
@@ -79,8 +152,15 @@ function UsageResults({ report }) {
         <h2 className="text-sm text-slate-300">{label}</h2>
         <p className="my-2 text-3xl font-semibold tabular-nums">{number(value)}</p>
         <p className="text-xs text-slate-400">{detail}</p>
+        {label === "Active users" && <a href="#usage-accounts" className="mt-2 inline-block text-sm text-violet-300 underline"
+          onClick={(e) => {
+            e.preventDefault();
+            setActiveOnly(true);
+            document.getElementById("usage-accounts")?.scrollIntoView({ behavior: "smooth" });
+          }}>Show active accounts</a>}
       </div>)}</div>
-    <UsersTable users={report.users} />
+    {report.retention_available && <Retention users={report.users} />}
+    <UsersTable users={report.users} activeOnly={activeOnly} setActiveOnly={setActiveOnly} />
     <div className="grid gap-4 md:grid-cols-2">
       <Breakdown title="Workflow run status"
         items={Object.entries(report.run_statuses).sort((a,b) => b[1] - a[1]).map(([s,n]) => [s.replaceAll("_"," "),n])}

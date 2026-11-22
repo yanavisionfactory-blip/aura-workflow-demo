@@ -1,9 +1,18 @@
 import json
+from datetime import date
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class DirectoryAccount(BaseModel):
+    name: str
+    email: str
+    joined: date
+    last_sign_in: date | None = None
+    internal: bool = False
 
 
 class Settings(BaseSettings):
@@ -135,6 +144,7 @@ class Settings(BaseSettings):
     clerk_jwks_url: str = ""
     clerk_issuer: str = ""
     platform_usage_admin_ids: str = ""
+    platform_usage_retention_seed: dict[str, DirectoryAccount] = Field(default_factory=dict, exclude=True, repr=False)
     clerk_authorized_parties: str = ""
     # Enable only after configuring Clerk OAuth scopes, resource audience and PKCE.
     chatgpt_mcp_enabled: bool = False

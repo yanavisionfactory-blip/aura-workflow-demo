@@ -1,10 +1,10 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
 
-from app.config import get_settings
+from app.config import DirectoryAccount, get_settings
 from app.db import session_dependency
 from app.models import (
     AuditEvent,
@@ -16,7 +16,13 @@ from app.models import (
     WorkflowRun,
     Workspace,
 )
-from app.platform_usage import install_usage_routes, observe_session, usage_report
+from app.platform_usage import (
+    SessionObservation,
+    install_usage_routes,
+    observe_session,
+    retention_outcomes,
+    usage_report,
+)
 
 
 @pytest.mark.parametrize("claims,expected", [
@@ -94,3 +100,40 @@ async def test_sessions_runs_and_tool_attribution_across_workspaces(database):
         assert (two["sessions"], two["tools"]) == (0, ["slack"])
         assert "session1" not in str(report) and "private" not in str(report)
         assert (await usage_report(db, None))["runs"] == 3
+
+
+def test_retention_calendar_boundaries():
+    joined = date(2026, 1, 1)
+    assert retention_outcomes(joined, date(2026, 1, 8), date(2026, 1, 15)) == {
+        1: "retained", 7: "retained", 14: "no_return", 30: "too_new",
+    }
+    assert retention_outcomes(joined, joined, date(2026, 2, 1))[1] == "no_return"
+    assert retention_outcomes(None, None, joined)[7] == "unknown"
+
+
+async def test_retention_combines_directory_and_observed_profile(database, monkeypatch):
+    now = datetime.now(UTC) - timedelta(minutes=5)
+    joined = now - timedelta(days=40)
+    historical = DirectoryAccount(name="Sample", email="sample@example.test", internal=True,
+                                  joined=joined.date(), last_sign_in=joined.date())
+    monkeypatch.setattr(get_settings(), "platform_usage_retention_seed", {
+        "user_sample": historical, "user_unobserved": historical,
+    })
+    async with database() as db:
+        db.add_all([Workspace(id=wid, name=wid) for wid in ("a", "b")])
+        await db.commit()
+        for wid, since in (("a", 2), ("b", 15), ("a", 20)):
+            profile = SessionObservation(joined=joined, last_sign_in=now - timedelta(days=since))
+            await observe_session(db, wid, "user_sample", "same", "Sample", profile)
+        await observe_session(db, "a", "user_new", "new", "New", SessionObservation(
+            email="new@example.test", joined=now, last_sign_in=now,
+        ))
+        for period in (7, 30, None):
+            report = await usage_report(db, period)
+            users = {row["user_id"]: row for row in report["users"]}
+            assert len(users) == 3 and report["active_users"] == 2
+            assert users["user_sample"]["retention"][30] == "retained"
+            assert users["user_unobserved"]["retention"][7] == "no_return"
+            assert users["user_unobserved"]["sessions"] == 0
+            assert users["user_sample"]["internal"] and not users["user_new"]["internal"]
+            assert users["user_new"]["retention"][7] == "too_new"

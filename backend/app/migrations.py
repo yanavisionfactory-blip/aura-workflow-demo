@@ -3,6 +3,7 @@ from sqlalchemy import text
 from .db import Base, engine
 
 DIRECT_TENANT_TABLES = (
+    "usage_profiles",
     "usage_sessions",
     "frameio_assistant_sessions",
     "frameio_assistant_invocations",
