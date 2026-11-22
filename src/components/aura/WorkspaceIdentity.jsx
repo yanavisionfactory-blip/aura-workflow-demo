@@ -21,6 +21,10 @@ export default function WorkspaceIdentity() {
         className="mt-1 w-full rounded-lg border border-white/10 bg-[#0c121e] p-2">
         {workspaces.map((item) => <option key={item.workspace_id} value={item.workspace_id}>{item.name}</option>)}
       </select> : <p className="mt-1">{workspace?.name || "Connecting…"}</p>}
+      {auth.canReadUsage && <a href={`${import.meta.env.BASE_URL}admin/usage`}
+        className="mt-4 block rounded-lg border border-violet-400/30 px-3 py-2 text-violet-200 hover:bg-violet-400/10">
+        Platform usage
+      </a>}
       <div className="mt-4 flex items-center gap-3">{accountControl}<span className="text-xs text-muted-foreground">Manage or switch your account</span></div>
       <p className="mt-3 text-xs text-muted-foreground">Saved workflow links require access to the workspace where they were created.</p>
     </section>}

@@ -156,6 +156,7 @@ from .pipedream_connect import (
 from .pipedream_connect import (
     released_pack as released_pipedream_pack,
 )
+from .platform_usage import install_usage_routes, may_read_usage
 from .policy import (
     DEFAULT_POLICY,
     TENANT_OVERRIDABLE_POLICY_KEYS,
@@ -334,6 +335,7 @@ class TenantContext:
     workspace_id: str
     subject: str
     role: str
+    session_id: str | None = None
 
 
 def _bearer_token(authorization: str | None) -> str | None:
@@ -366,6 +368,7 @@ async def tenant_context(
             workspace_id=x_workspace_id,
             subject=claims["sub"],
             role="member",
+            session_id=claims.get("sid"),
         )
     if not settings.allow_legacy_workspace_tokens:
         raise HTTPException(401, "Sign in is required")
@@ -401,6 +404,7 @@ async def tenant_session(
 from .frameio_browser import install_routes as install_frameio_browser_routes
 
 install_frameio_browser_routes(app, tenant_context, tenant_session)
+install_usage_routes(app, clerk_identity, tenant_context, tenant_session)
 
 
 @app.get("/health")
@@ -658,7 +662,8 @@ async def bootstrap_identity(
         elif not membership.active:
             raise HTTPException(403, "Workspace membership is inactive")
         role = membership.role
-    return {"workspace_id": workspace.id, "name": workspace.name, "role": role}
+    return {"workspace_id": workspace.id, "name": workspace.name, "role": role,
+            "platform_usage_admin": may_read_usage(claims)}
 
 
 @app.get("/v1/tools")
@@ -4832,7 +4837,7 @@ async def reconnect_connection(
         definition = PROVIDERS.get(tool.slug)
         if not definition:
             raise HTTPException(409, "The OAuth provider is no longer registered")
-        state = create_oauth_state(context.workspace_id, tool.slug)
+        state = create_oauth_state(context.workspace_id, tool.slug, context.subject)
         try:
             authorization_url = oauth_authorization_url(settings, definition, state)
         except ValueError as exc:
@@ -5009,7 +5014,7 @@ async def oauth_start(
             return await meta_ads_oauth.start(session, context, settings)
         except ValueError as exc:
             raise HTTPException(503, str(exc)) from None
-    state = create_oauth_state(context.workspace_id, provider)
+    state = create_oauth_state(context.workspace_id, provider, context.subject)
     try:
         authorization_url = oauth_authorization_url(settings, definition, state)
     except ValueError as exc:
@@ -5157,6 +5162,9 @@ async def oauth_callback(
                 verified_at=datetime.now(UTC),
             )
         )
+    if claims.get("sub"):
+        session.add(AuditEvent(workspace_id=wid, actor=claims["sub"],
+                               event_type="connector.authorized", payload={"tool_id": tool.id}))
     await session.commit()
     return RedirectResponse(f"{frontend_url}?tool_connected={provider}")
 

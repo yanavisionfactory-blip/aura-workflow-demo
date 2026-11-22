@@ -80,6 +80,18 @@ class TenantMembership(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
+class UsageSession(Base):
+    __tablename__ = "usage_sessions"
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), primary_key=True
+    )
+    session_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    subject: Mapped[str] = mapped_column(String(240), index=True)
+    display_name: Mapped[str] = mapped_column(String(160), default="")
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class PolicyConfig(Base):
     __tablename__ = "policy_configs"
     __table_args__ = (UniqueConstraint("workspace_id", "version", name="uq_policy_version"),)

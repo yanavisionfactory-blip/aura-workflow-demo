@@ -1,3 +1,4 @@
+import PlatformUsage from "@/pages/PlatformUsage";
 import RunSupport from "@/pages/RunSupport";
 import FrameioBrowserBridge from "@/lib/FrameioBrowserBridge";
 import { useEffect, useState } from "react";
@@ -96,6 +97,7 @@ function ProductRoutes() {
       <FrameioBrowserBridge />
       <Routes>
         <Route path="/" element={<Demo />} />
+        <Route path="/admin/usage" element={<PlatformUsage />} />
         <Route path="/workflows/:workflowId" element={<SavedWorkflow />} />
         <Route path="/frameio/assistant" element={<Navigate to="/" replace />} />
         <Route path="/results" element={<DeliveryResults />} />
