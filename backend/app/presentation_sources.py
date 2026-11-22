@@ -114,13 +114,14 @@ def source_presentation_operation_pairs(prompt: str, inventory: list[dict]) -> s
     """
     if not source_presentation_requested(prompt):
         return set()
-    research = _external_research_requested(prompt)
+    from .presentation_research import WEB_OPERATIONS
+
     canva_requested = canva_destination_requested(prompt)
     return {
         (item["slug"], operation)
         for item in inventory for operation in item.get("allowed_operations", [])
         if operation in SUPPORT_OPERATIONS
-        or (research and item["slug"] == "aura" and operation in {"web.search", "web.page.read"})
+        or (item["slug"] == "aura" and operation in WEB_OPERATIONS)
         # A generic deck request needs creation and read-back, not every
         # Slides edit/template operation. Reserving the whole provider catalog
         # can exhaust the planning budget before the model sees the request.
@@ -139,7 +140,7 @@ def source_presentation_requirements(prompt: str) -> list[str]:
         "requested location. Do not combine semantic_goal with query or drive. It inventories "
         "candidates, reads supported contents and verifies relevance by meaning, returning sources. "
         "Bind report.compose sources={{steps.discover.sources}} with presentation=true and an "
-        "explicit dependency. When the brief asks for external research, use web.search and web.page.read, "
+        "explicit dependency. When the decision needs outside evidence, use web.search and web.page.read, "
         "then bind the read pages with URL and text as additional report.compose public_sources. Keep project "
         "facts grounded in Drive. For a Drive-only brief omit public_sources. Do not add a first-file Google Docs read: discovery has already read "
         "and assessed the actual documents. Every downstream reference to semantic discovery, "
@@ -617,18 +618,10 @@ def validate_source_presentation_plan(prompt: str, plan) -> None:
                      and step.dependency_mode == "all_succeeded"
                      and (not needs_discovery or semantic_content_read(step) or ancestors(step) & folder_reads)}
     semantic_keys = {step.key for step in steps if semantic_content_read(step)}
-    if _external_research_requested(prompt):
-        pages = {s.key for s in steps if s.tool_slug == "aura" and s.operation == "web.page.read"
-                 and not s.optional and s.condition is None and s.dependency_mode == "all_succeeded"}
-        for write in (s for s in steps if s.operation in {"canva.presentation.create", "google-slides.create-presentation"}):
-            composers = [s for s in steps if s.operation == "report.compose" and s.key in ancestors(write)]
-            if not any(pages & ancestors(c) & referenced_step_keys([
-                    c.arguments.get("public_sources"), c.arguments.get("sources")]) for c in composers):
-                raise SourcePresentationPlanError(
-                    "The requested external research needs actual public page evidence in the presentation. "
-                    "Read a relevant public page and bind its text and URL as report.compose public_sources "
-                    "alongside the original Drive sources."
-                )
+    from .presentation_research import validate_research
+    from .request_contracts import user_request_text
+
+    validate_research(plan, _external_research_requested(prompt), ancestors, user_request_text(prompt))
 
     for step in steps:
         if step.operation in FOLDER_READS:

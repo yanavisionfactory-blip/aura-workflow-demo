@@ -595,9 +595,10 @@ async def ensure_aura_intelligence(session, workspace_id: str) -> ToolConnection
     return tool
 
 
-def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict], request_prompt: str = "") -> None:
+def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict], request_prompt: str = "", *, research=None) -> None:
     from .drive_discovery import bind_discovery_report_sources
     from .estimating_handoff import bind_estimate_receipts
+    from .presentation_research import apply_research_brief
     from .presentation_sources import (
         bind_canva_verification,
         bind_document_report_text,
@@ -616,6 +617,7 @@ def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict], request_p
     bind_document_search_types(request_prompt, plan)
     bind_presentation_composition(request_prompt, plan, manifests_by_slug)
     bind_presentation_brief(request_prompt, plan)
+    apply_research_brief(plan, research)
     bind_discovery_report_sources(plan)
     bind_document_report_text(plan)
     bind_canva_verification(plan, manifests_by_slug, request_prompt)
@@ -1132,10 +1134,19 @@ async def _create_compiled_plan(
     if audited_plan is not None and missing_selected_tools(audited_plan, selected_targets):
         # A generic recipe cannot silently discard the user's composer choices.
         audited_plan = None
+    from .presentation_research import WEB_OPERATIONS, assess_research_brief
+    from .presentation_sources import source_presentation_requested
+
+    research = None
+    if source_presentation_requested(requested_text) and any(
+        item["slug"] == "aura" and WEB_OPERATIONS <= set(item.get("allowed_operations", []))
+        for item in catalog_inventory
+    ):
+        research = await assess_research_brief(requested_text)
     if audited_plan is not None:
         reject_excluded_steps(audited_plan)
         validate_video_source_bindings(audited_plan, input_values)
-        _normalize_planned_steps(audited_plan, manifests_by_slug, request_prompt or prompt)
+        _normalize_planned_steps(audited_plan, manifests_by_slug, request_prompt or prompt, research=research)
         from .intelligence_backup import add_intelligence_backups
 
         add_intelligence_backups(audited_plan, catalog_inventory, objective, excluded_tool_families)
@@ -1180,6 +1191,14 @@ async def _create_compiled_plan(
     from .presentation_sources import source_presentation_requirements
 
     repair_requirements.extend(source_presentation_requirements(requested_text))
+    if research:
+        repair_requirements.append({
+            "discover": "Use public market or contextual evidence for this decision. Search for: " + research.query
+            + ". Read a retrieved result URL and bind the page text and URL in report.compose public_sources. "
+              "Use public topic terms only. Never send private documents or workflow references to web search.",
+            "provided_pages": "Read the public URLs requested by the user and bind their text and URLs as public_sources.",
+            "project_only": "Use only project materials for this deck. Omit public searches and public page reads.",
+        }[research.scope])
     from .drive_discovery import discovery_requirements
 
     repair_requirements.extend(discovery_requirements(requested_text))
@@ -1282,7 +1301,7 @@ async def _create_compiled_plan(
             reddit_ads.apply_account_defaults(
                 plan, inventory, manifests_by_slug, prompt=request_prompt or prompt,
             )
-            _normalize_planned_steps(plan, manifests_by_slug, request_prompt or prompt)
+            _normalize_planned_steps(plan, manifests_by_slug, request_prompt or prompt, research=research)
             from .intelligence_backup import add_intelligence_backups
 
             add_intelligence_backups(plan, catalog_inventory, objective, excluded_tool_families)

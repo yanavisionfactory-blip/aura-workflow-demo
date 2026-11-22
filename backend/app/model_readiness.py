@@ -45,7 +45,17 @@ async def probe_direct_model() -> dict:
         result = {"ready": sources_ready, "model": settings.openai_model, "source_review": sources_ready}
         if sources_ready and settings.canary_mode:
             from .presentation_draft import PresentationDraft, compose_presentation, review_copy
+            from .presentation_research import assess_research_brief
             from .reports import ReportRequest
+
+            market_question = ("I have a project in a Drive folder making background music for restaurants. "
+                "Create a presentation for those places so I can understand the viability of the project.")
+            market = await assess_research_brief(market_question)
+            private = await assess_research_brief(market_question + " Use only the materials in my folder.")
+            result["presentation_research"] = market.scope == "discover" and private.scope == "project_only"
+            if not result["presentation_research"]:
+                return {**result, "ready": False}
+
 
             brief = ReportRequest(title="Brisa", instructions="Pitch a listening trial to a café owner in European Portuguese.",
                 sources=[{"id": "brief", "title": "Notes", "content": "Original music for cafés."}], presentation=True)

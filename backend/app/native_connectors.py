@@ -195,7 +195,9 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                 "search",
                 "Render and read a public HTTPS page, including client-rendered content.",
                 required=("url",),
-                properties={"url": {"type": "string", "format": "uri"}},
+                properties={"url": {"type": "string", "format": "uri"},
+                            "max_text_chars": {"type": "integer", "minimum": 1, "maximum": 60000,
+                                "description": "Optional maximum excerpt length in characters."}},
             ),
             _module(
                 "creator.tiktok.screen",
