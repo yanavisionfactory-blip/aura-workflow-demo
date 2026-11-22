@@ -383,6 +383,8 @@ class NangoClient:
         *,
         integration_id: str | None = None,
     ) -> dict:
+        hostname = self.settings.salesforce_workspace_domains.get(workspace_id) if provider == "salesforce" else None
+
         async def create() -> dict:
             resolved_id = await self.preflight(provider, integration_id)
             payload = {
@@ -393,11 +395,13 @@ class NangoClient:
                     "aura_provider": provider,
                 },
             }
+            if hostname:
+                payload["integrations_config_defaults"] = {resolved_id: {"connection_config": {"hostname": hostname}}}
             result = await self._request("POST", "/connect/sessions", json=payload)
             return result.get("data", result)
 
         return await self._cached_authorization_session(
-            (provider, workspace_id, subject, "new", integration_id or ""), create
+            (provider, workspace_id, subject, "new", integration_id or "", hostname or ""), create
         )
 
     async def create_reconnect_session(

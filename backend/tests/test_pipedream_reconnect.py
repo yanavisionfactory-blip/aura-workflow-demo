@@ -228,3 +228,21 @@ async def test_salesforce_connect_selects_instance_and_reconnect_keeps_it(
         assert legacy["account_id"] == "apn_sf"
         assert "app_override_id" not in legacy
         client.salesforce_login_override.assert_not_awaited()
+
+
+
+async def test_company_salesforce_connect_uses_released_domain_aware_route(broker, database, monkeypatch):
+    config, _ = broker
+    config.salesforce_workspace_domains = {"workspace": "example.my.salesforce.com"}
+    monkeypatch.setattr(main, "managed_connector_client", lambda: SimpleNamespace(configured=True))
+    monkeypatch.setattr(main, "released_connector", AsyncMock(return_value=SimpleNamespace(integration_id="crm")))
+    managed = AsyncMock(return_value={"connect_link": "https://connect.example"})
+    monkeypatch.setattr(main, "create_managed_connector_session", managed)
+    public = AsyncMock(return_value=True)
+    monkeypatch.setattr(main, "released_pipedream_pack", public)
+    async with database() as session:
+        context = main.TenantContext("workspace", "user", "owner")
+        result = await main.create_connector_broker_session("salesforce", context=context, session=session)
+        assert result["backend"] == "nango"
+        assert managed.await_args.kwargs["provider"] == "salesforce"
+        public.assert_not_awaited()

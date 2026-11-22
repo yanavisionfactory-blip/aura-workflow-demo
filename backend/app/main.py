@@ -314,6 +314,19 @@ async def startup() -> None:
 
 
 async def _prepare_salesforce_presets() -> None:
+    nango = managed_connector_client()
+    if nango.configured:
+        async with SessionLocal() as session:
+            release = await released_connector(session, "salesforce")
+        if release:
+            try:
+                await nango.preflight("salesforce", release.integration_id)
+            except ManagedConnectorError:
+                logger.warning("salesforce_company_signin managed_route=registration_unavailable")
+            else:
+                logger.info("salesforce_company_signin managed_route=ready")
+        else:
+            logger.warning("salesforce_company_signin managed_route=no_released_integration")
     client = pipedream_client()
     for host in set(settings.salesforce_workspace_domains.values()):
         try:
@@ -1608,6 +1621,8 @@ async def managed_connector_status(
     dynamic_catalog = [
         {
             **release_descriptor(release),
+            "preferred_connection": (release.provider_slug == "salesforce"
+                                     and context.workspace_id in settings.salesforce_workspace_domains),
             "source": "connector_engineer",
             "connection_backend": "nango",
             "availability": "available",
@@ -1843,6 +1858,8 @@ async def search_connector_broker_apps(
                 continue
             item = {
                 **release_descriptor(release),
+                "preferred_connection": (release.provider_slug == "salesforce"
+                                         and context.workspace_id in settings.salesforce_workspace_domains),
                 "availability": "available",
                 "connectable": True,
                 "eligible_for_one_click": True,
@@ -2825,12 +2842,14 @@ async def create_connector_broker_session(
     pipedream_only = provider in PROVIDERS and PROVIDERS[provider].pipedream_only
     # New Salesforce and Google sign-ins prefer their released managed app.
     # Reconnects stay pinned to the backend that owns the account.
+    nango_release = None if provider in PROVIDERS else await released_connector(session, provider)
+    company_signin = (provider == "salesforce" and context.workspace_id in settings.salesforce_workspace_domains
+                      and nango.configured and nango_release is not None)
     preferred_pipedream = bool(
-        not selected_tool and (provider in PUBLIC_GOOGLE_CONNECTORS or is_salesforce_app(provider))
+        not selected_tool and not company_signin and (provider in PUBLIC_GOOGLE_CONNECTORS or is_salesforce_app(provider))
         and pipedream_client().configured
         and await released_pipedream_pack(session, provider)
     )
-    nango_release = None if provider in PROVIDERS else await released_connector(session, provider)
     if salesforce_sandbox:
         if selected_tool and selected_backend != "pipedream":
             raise HTTPException(409, "This connection already uses a different sign-in method")
