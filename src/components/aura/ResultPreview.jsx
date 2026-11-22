@@ -129,7 +129,17 @@ export default function ResultPreview({ result, results, activity = [], backendR
   if (["document", "report"].includes(result.kind) && result.preview) return (
     <div className="mx-auto max-w-3xl rounded-2xl border border-white/10 bg-[#f8fafc] px-6 py-8 text-[#1e293b] shadow-lg sm:px-12 sm:py-12">
       <h4 className="mb-6 text-2xl font-semibold">{result.preview.title}</h4>
-      <div className="aura-article-preview text-sm leading-7"><ReactMarkdown {...documentMarkdownOptions}>{result.preview.body}</ReactMarkdown></div>
+      {result.preview.deck ? <>
+        {result.preview.deck.subtitle && <p className="mb-4">{result.preview.deck.subtitle}</p>}
+        {result.preview.deck.slides.map((slide, index) => <section key={index} className="border-t border-slate-200 py-4">
+          <p className="text-sm text-slate-600">{slide.period}</p>
+          <h5 className="mb-2 font-semibold">{slide.title}</h5>
+          <ul className="list-disc space-y-1 pl-5">{slide.items.map((item, i) => <li key={i}>{item}</li>)}</ul>
+        </section>)}
+        <details className="mt-4"><summary>Review notes</summary>
+          <div className="aura-article-preview text-sm leading-7"><ReactMarkdown {...documentMarkdownOptions}>{result.preview.body}</ReactMarkdown></div>
+        </details>
+      </> : <div className="aura-article-preview text-sm leading-7"><ReactMarkdown {...documentMarkdownOptions}>{result.preview.body}</ReactMarkdown></div>}
       {result.kind === "report" && result.preview.sources?.length > 0 && <details className="mt-6 border-t border-slate-200 pt-4">
         <summary className="cursor-pointer font-semibold">Supplied source inputs ({result.preview.sources.length})</summary>
         {result.preview.sources.map((source) => <section key={source.id} className="mt-4 rounded-xl bg-slate-100 p-4">

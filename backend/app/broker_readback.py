@@ -28,6 +28,19 @@ async def readback_executor(session, tool, required):
         raise ValueError("Managed account reference is missing")
 
     class ReadbackExecutor:
+        async def inspect_google_slides(self, check):
+            from .slides_materials import inspect_saved_export, verify_slides
+
+            # execute() validates the signed read capability and the selected account.
+            observed = await self.execute(check.operation, check.arguments)
+            saved = observed.get("ret", observed)
+            if saved.get("presentationId") != check.resource_id:
+                raise ValueError("The saved presentation identity changed")
+            verify_slides(saved, check.expected["presentation"])
+            review = await inspect_saved_export(pipedream_client_for_tool(tool), external_user_id,
+                account_id, check.resource_id, check.expected["presentation"])
+            return {**observed, "page_review": review}
+
         async def read_sheet_cells(self, arguments):
             from .sheets_write_outcomes import INFO, READ, read_cells
             # Both approved signed reads are required: cell contents and numeric

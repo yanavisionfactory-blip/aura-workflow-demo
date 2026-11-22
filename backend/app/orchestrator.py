@@ -4193,6 +4193,10 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             and "semantic_goal" in arguments else
                             180.0 if operation == "intelligence.presentation.review" else
                             max(float(snapshot.policy_snapshot["step_timeout_seconds"]),
+                                4 * (get_settings().managed_agents_timeout_seconds if get_settings().managed_agents_enabled
+                                     else get_settings().model_call_timeout_seconds) + 15)
+                            if operation == "report.compose" and arguments.get("presentation") is True else
+                            max(float(snapshot.policy_snapshot["step_timeout_seconds"]),
                                 float(get_settings().managed_agents_timeout_seconds) + 15)
                             if operation == "report.compose" and get_settings().managed_agents_enabled else
                             float(BROWSER_WAIT_SECONDS + 30)

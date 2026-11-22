@@ -30,8 +30,9 @@ def preserve_web_source_provenance(plan: WorkflowPlan) -> None:
     prior_reads: set[str] = set()
     for step in plan.steps:
         if step.tool_slug == "aura" and step.operation == "report.compose":
-            sources = step.arguments.get("sources")
-            for source in sources if isinstance(sources, list) else []:
+            sources = [source for field in ("sources", "public_sources")
+                       if isinstance(step.arguments.get(field), list) for source in step.arguments[field]]
+            for source in sources:
                 if not isinstance(source, dict) or not isinstance(source.get("content"), str):
                     continue
                 content = source["content"]
@@ -102,6 +103,8 @@ class ReportRequest(BaseModel):
     user_request: str | None = Field(default=None, min_length=1, max_length=20_000,
         description="Complete original user brief; step instructions specialize this request.")
     sources: list[ReportSource] = Field(min_length=1, max_length=20)
+    public_sources: list[ReportSource] = Field(default_factory=list, max_length=20,
+        description="Additional evidence from public pages read for a requested researched presentation; include source URLs.")
     synthetic: bool = False
     presentation: bool = False
     dashboard: DashboardContext | None = None
@@ -109,7 +112,10 @@ class ReportRequest(BaseModel):
 
     @model_validator(mode="after")
     def distinct_sources(self):
-        if len({source.id for source in self.sources}) != len(self.sources):
+        combined = self.sources + self.public_sources
+        if self.public_sources and (not self.presentation or len(combined) > 20):
+            raise ValueError("Public slide evidence requires a presentation with at most 20 total sources")
+        if len({source.id for source in combined}) != len(combined):
             raise ValueError("Report source IDs must be distinct")
         if self.presentation and (self.dashboard or self.email_quality):
             raise ValueError("Presentation content cannot be combined with dashboard or email composition")

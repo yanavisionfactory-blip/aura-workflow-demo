@@ -347,3 +347,22 @@ async def test_composition_model_receives_the_original_customer_brief(monkeypatc
     assert PROMPT in parse.await_args.kwargs["input"]
     assert "Summarize the materials" in parse.await_args.kwargs["input"]
     assert result["presentation"]["phases"][0]["items"] == DRAFT["phases"][0]["items"]
+
+
+def test_requested_web_evidence_must_reach_the_deck_composer():
+    prompt = PROMPT + " Research public sources for context."
+    plan = project_plan("canva")
+    manifests = project_manifests()
+    _normalize_planned_steps(plan, manifests, prompt)
+    validate_source_presentation_plan(PROMPT + " Do not use external research.", plan)
+    validate_source_presentation_plan("Read my Drive folder and create a presentation for my online store.", plan)
+    with pytest.raises(SourcePresentationPlanError, match="actual public page evidence"):
+        validate_source_presentation_plan(prompt, plan)
+    report = plan.steps[1]
+    page = PlanStep(key="research", agent="Researcher", tool_slug="aura", operation="web.page.read",
+        arguments={"url": "https://example.com/study"}, reason="Read public context", expected_output="Page")
+    plan.steps.insert(1, page)
+    report.depends_on.append(page.key)
+    report.arguments["public_sources"] = [{"id": "study", "title": "Market context",
+        "content": "Source URL: {{steps.research.url}}\n{{steps.research.text}}"}]
+    validate_source_presentation_plan(prompt, plan)

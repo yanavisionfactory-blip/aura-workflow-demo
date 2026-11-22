@@ -295,7 +295,9 @@ async def test_populated_slides_are_one_write_and_read_back_exactly(monkeypatch)
     assert receipt["verification"]["saved_content_matches"]
     check = build_extended("google-slides.create-presentation", {"presentation": DECK}, receipt)
     assert required_reads("google-slides.create-presentation", {"presentation": DECK}) == {"google-slides.get-presentation"}
-    assert evaluate_extended(check, {"ret": saved})["status"] == "verified"
+    assert evaluate_extended(check, {"ret": saved})["status"] == "unverified"
+    page_review = {"design_id": "created-presentation", "page_count": 1, "verification": {"status": "verified"}}
+    assert evaluate_extended(check, {"ret": saved, "page_review": page_review})["status"] == "verified"
     saved["slides"] = []
     assert evaluate_extended(check, {"ret": saved})["status"] == "failed"
 

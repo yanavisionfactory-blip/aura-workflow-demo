@@ -48,7 +48,10 @@ def plan():
 
 
 def model_stub(monkeypatch, draft=DRAFT):
-    parse = AsyncMock(return_value=SimpleNamespace(output_parsed=draft))
+    def respond(**call):
+        parsed = {"issues": []} if call["text_format"] is presentation_draft.EditorialReview else draft
+        return SimpleNamespace(output_parsed=parsed)
+    parse = AsyncMock(side_effect=respond)
     class Client:
         async def __aenter__(self):
             return SimpleNamespace(responses=SimpleNamespace(parse=parse))
@@ -218,7 +221,7 @@ async def test_real_resolved_document_content_composes_and_renders_populated_ppt
     arguments = coerce_module_arguments(native_manifest("aura"), "report.compose",
         resolve_value(compose.arguments, context))
     result = await ProviderExecutor({}, capability_manifest=native_manifest("aura")).execute("report.compose", arguments)
-    assert SOURCES[0]["content"] in parse.await_args.kwargs["input"]
+    assert SOURCES[0]["content"] in parse.await_args_list[0].kwargs["input"]
     assert not output_errors("report.compose", result)
     assert "result_url" not in result
     context["steps"][compose.key] = step_context_value(result, "report.compose")
@@ -230,7 +233,7 @@ async def test_real_resolved_document_content_composes_and_renders_populated_ppt
     assert "Project: instrumental background music." in text
     assert "Proposed pilot: collect owner feedback." in text
     assert "Sources: [source_1]" in result["body"] and result["limitations"] == DRAFT["limitations"]
-    assert parse.await_count == 1 and parse.await_args.kwargs["store"] is False
+    assert parse.await_count == 2 and parse.await_args.kwargs["store"] is False
     step = RunStep(status=StepStatus.completed, operation="report.compose", output={"provider_result": result})
     assert not editable_text_output(step), "a text-only edit must not leave published slides unchanged"
 
@@ -247,3 +250,45 @@ async def test_invalid_generation_stops_before_render_or_publish(monkeypatch, ch
     with pytest.raises(ValueError):
         await presentation_draft.compose_presentation(ReportRequest(
             title="Project", instructions=PROMPT, sources=SOURCES, presentation=True))
+
+
+@pytest.mark.parametrize("fixed", [True, False])
+async def test_incomplete_portuguese_pitch_is_rewritten_and_rechecked(monkeypatch, fixed):
+    from copy import deepcopy
+
+    parse = model_stub(monkeypatch)
+    broken = deepcopy(DRAFT)
+    broken["phases"][0]["title"] = "Atmosferas musicais para negócio, não “m"
+    revised = deepcopy(DRAFT)
+    revised["title"] = "Brisa Studio"
+    revised["phases"][0].update(title="Música original para o seu café",
+        items=["Que ambiente gostaria de criar ao almoço?", "Quer ouvir uma amostra no seu espaço?"])
+    issues = {"issues": ["The heading ends in a broken quote and the pitch needs a concrete invitation."]}
+    parse.side_effect = [SimpleNamespace(output_parsed=item) for item in
+                         [broken, issues, revised if fixed else broken, {"issues": []} if fixed else issues]]
+    request = ReportRequest(title="Music", user_request="Pitch Brisa Studio to café owners in Portuguese.",
+        instructions="Use the notes", sources=SOURCES, presentation=True)
+    if fixed:
+        result = await presentation_draft.compose_presentation(request)
+        assert result["presentation"]["phases"][0]["title"] == revised["phases"][0]["title"]
+        assert broken["phases"][0]["title"] not in result["body"]
+    else:
+        with pytest.raises(ValueError, match="editorial revision"):
+            await presentation_draft.compose_presentation(request)
+    assert parse.await_count == 4
+    repair = parse.await_args_list[2].kwargs["input"]
+    assert "editor_feedback" in repair and SOURCES[0]["content"] in repair
+
+
+async def test_public_page_and_drive_materials_both_reach_composition(monkeypatch):
+    from copy import deepcopy
+
+    draft = deepcopy(DRAFT)
+    draft["phases"][0]["source_ids"].append("public_page")
+    parse = model_stub(monkeypatch, draft)
+    public = {"id": "public_page", "title": "Hospitality report", "content": "Source URL: https://example.com/report\nSurvey findings"}
+    request = ReportRequest(title="Music", instructions="Use the report for comparison only",
+                            sources=SOURCES, public_sources=[public], presentation=True)
+    result = await presentation_draft.compose_presentation(request)
+    assert result["sources"] == [*SOURCES, public]
+    assert "https://example.com/report" in parse.await_args_list[0].kwargs["input"]

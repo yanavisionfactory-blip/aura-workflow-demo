@@ -616,8 +616,9 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
       completionSummary: "Inspect the findings, implementation backlog and actual outcomes from each tool.",
       audit, link: null, downloadUrl: null,
     };
+    const deck = !userEdited && slideContent(saved.presentation);
     return {
-      title: saved.title || context.title, kind: "report",
+      title: deck?.title || saved.title || context.title, kind: "report",
       provider: saved.analysis_provider === "frameio_ai_assistant" ? "Frame.io AI Assistant" : saved.analysis_provider === "aura_intelligence"
         ? operationProviderName("AURA Intelligence", report.operation) : "ChatGPT",
       providerVerb: "Generated with",
@@ -626,7 +627,8 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
         ? "Fictional client review saved in AURA. All client data is synthetic."
         : saved.summary,
       detail: saved.summary,
-      preview: { title: saved.title, body: saved.body, sources: saved.sources || [] },
+      preview: { title: deck?.title || saved.title, body: saved.body, sources: saved.sources || [],
+        ...(deck ? { deck } : {}) },
       userEdited,
       link: null, downloadUrl: null,
     };

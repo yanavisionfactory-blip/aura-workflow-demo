@@ -40,6 +40,7 @@ async def managed_runtime(monkeypatch, database):
         assert kwargs["agent"]["tools"] == []
         key = kwargs["metadata"]["aura_call_key"]
         assert await managed._session_checkpoint(managed.current_run.get(), key) is not None
+        state["is_editor"] = "Independently proofread" in kwargs["agent"]["instructions"]
         state["metadata"] = kwargs["metadata"]
         state["created"] += 1
         state["submitted"] += 1
@@ -59,7 +60,7 @@ async def managed_runtime(monkeypatch, database):
 
     async def items(*args, **kwargs):
         return NS(data=[NS(type="message", role="assistant", turn_id="turn-test",
-                          status="completed", phase=state["final_phase"], output_text=state["final"])])
+                          status="completed", phase=state["final_phase"], output_text=('{"issues": []}' if state.get("is_editor") else state["final"]))])
 
     sessions = NS(create=AsyncMock(side_effect=create),
         list=AsyncMock(side_effect=list_sessions),
