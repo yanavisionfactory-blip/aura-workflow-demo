@@ -290,6 +290,8 @@ async def startup() -> None:
         # A release canary must never migrate or dispatch customer work.
         return
     await migrate_database()
+    if settings.salesforce_workspace_domains:
+        app.state.salesforce_preset_task = asyncio.create_task(_prepare_salesforce_presets())
     from .internal_diagnostics import log_recent_managed_failures_safely, log_recent_stops_safely
     from .scheduler_runtime import recover_recorded_jira_readbacks
 
@@ -304,15 +306,23 @@ async def startup() -> None:
     except Exception:  # Failed recovery cannot take down the API.
         logger.exception("Saved Jira receipt recovery deferred")
     if settings.recovery_scheduler_enabled:
-        import asyncio
-
         app.state.recovery_task = asyncio.create_task(recovery_loop())
     if settings.connector_engineer_enabled:
-        import asyncio
-
         app.state.connector_engineer_task = asyncio.create_task(
             connector_engineer_loop(SessionLocal)
         )
+
+
+async def _prepare_salesforce_presets() -> None:
+    client = pipedream_client()
+    for host in set(settings.salesforce_workspace_domains.values()):
+        try:
+            await client.salesforce_login_override("salesforce_rest_api", host)
+        except PipedreamConnectError as exc:
+            logger.warning("salesforce_company_signin preset=unavailable reason=%s",
+                           "unsupported_field" if exc.upstream_code == "salesforce_domain_unsupported" else "provider_error")
+        else:
+            logger.info("salesforce_company_signin preset=ready")
 
 
 @app.on_event("shutdown")
@@ -323,6 +333,7 @@ async def shutdown_recovery() -> None:
     tasks = [
         getattr(app.state, "recovery_task", None),
         getattr(app.state, "connector_engineer_task", None),
+        getattr(app.state, "salesforce_preset_task", None),
     ]
     for task in (item for item in tasks if item):
         task.cancel()
@@ -2932,6 +2943,7 @@ async def create_connector_broker_session(
             None,
         )
         salesforce_instance = None
+        existing_account = None
         if is_salesforce_app(vendor_app):
             # Preserve existing grants, including legacy sandboxes whose
             # Salesforce environment predates AURA's app overrides.
@@ -2943,7 +2955,8 @@ async def create_connector_broker_session(
                 if salesforce_sandbox and salesforce_instance != "sandbox":
                     raise HTTPException(409, "A different Salesforce account is already connected.")
             else:
-                salesforce_instance = "sandbox" if salesforce_sandbox else "production"
+                salesforce_instance = ("sandbox" if salesforce_sandbox else
+                                       settings.salesforce_workspace_domains.get(context.workspace_id, "production"))
         elif salesforce_sandbox:
             raise HTTPException(409, "This connector does not support Salesforce test accounts")
         # An explicit reconnect must offer fresh consent even when the old
@@ -2997,7 +3010,14 @@ async def create_connector_broker_session(
                 }
         app_override = None
         if salesforce_instance:
-            app_override = await client.salesforce_login_override(vendor_app, salesforce_instance)
+            try:
+                app_override = await client.salesforce_login_override(vendor_app, salesforce_instance)
+            except PipedreamConnectError as exc:
+                if exc.upstream_code != "salesforce_domain_unsupported" or existing_account:
+                    raise
+                # Older connector forms only accept the two built-in environments.
+                salesforce_instance = "production"
+                app_override = await client.salesforce_login_override(vendor_app, salesforce_instance)
         grant = await client.create_connect_token(external_user_id)
     except PipedreamConnectError as exc:
         raise HTTPException(503 if exc.retryable else 409, str(exc)) from exc

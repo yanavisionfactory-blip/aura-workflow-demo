@@ -1,10 +1,12 @@
 import json
 from datetime import date
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+SalesforceLoginHost = Annotated[str, Field(pattern=r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.my\.salesforce\.com$")]
 
 
 class DirectoryAccount(BaseModel):
@@ -162,6 +164,7 @@ class Settings(BaseSettings):
     # Pipedream Connect supplies the managed-auth/action long tail. Credentials
     # authorize AURA's server only; browsers receive short-lived, user-scoped
     # Connect tokens and never receive these values.
+    salesforce_workspace_domains: dict[str, SalesforceLoginHost] = Field(default_factory=dict, repr=False)
     pipedream_client_id: str = ""
     pipedream_client_secret: str = ""
     pipedream_project_id: str = ""

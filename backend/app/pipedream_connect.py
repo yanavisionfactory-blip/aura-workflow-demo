@@ -12,6 +12,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import re
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -241,6 +242,29 @@ def _custom_fields(app: dict[str, Any]) -> list[dict[str, Any]]:
 
 def is_salesforce_app(provider: str) -> bool:
     return canonical_provider_slug(provider) in {"salesforce", "salesforce-rest-api"}
+
+
+def _salesforce_company_fields(app: dict, host: str) -> dict:
+    """Fill the connector's declared login host or subdomain field."""
+    fields = _custom_fields(app)
+    for field in fields:
+        name = field.get("name")
+        if not isinstance(name, str) or field.get("type") not in {"string", "text"}:
+            continue
+        description = str(field.get("description") or "").lower()
+        if name == "yourinstance" and ("login" in description and "test" in description
+                                       or ".salesforce.com" in description):
+            return {name: host.removesuffix(".salesforce.com")}
+        if name in {"login_host", "login_hostname"} and ".my.salesforce.com" in description:
+            return {name: host}
+    # Emit only public form field names and types to diagnose vendor changes.
+    shape = [(f.get("name"), f.get("type")) for f in fields
+             if all(isinstance(f.get(k), str) and re.fullmatch(r"[A-Za-z0-9_]{1,64}", f[k])
+                    for k in ("name", "type"))]
+    logging.getLogger(__name__).info("salesforce_company_fields unsupported=%s", shape)
+    # Closed production/sandbox selectors cannot express an organization hostname.
+    raise PipedreamConnectError("The Salesforce connector does not offer company sign-in.",
+                                retryable=False, upstream_code="salesforce_domain_unsupported")
 
 
 def _salesforce_instance_field(app: dict, instance: str) -> dict:
@@ -703,10 +727,13 @@ class PipedreamClient:
         return data
 
     async def salesforce_login_override(self, provider: str, instance: str) -> str:
-        if not is_salesforce_app(provider) or instance not in {"production", "sandbox"}:
+        company = instance not in {"production", "sandbox"}
+        if not is_salesforce_app(provider) or (company and not re.fullmatch(
+            r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.my\.salesforce\.com", instance
+        )):
             raise ValueError("Unknown Salesforce sign-in route")
         app = await self.get_app(provider)
-        fields = _salesforce_instance_field(app, instance)
+        fields = _salesforce_company_fields(app, instance) if company else _salesforce_instance_field(app, instance)
         project = self.settings.pipedream_project_id
         path = f"/v1/connect/{quote(project, safe='')}/app_overrides"
         name = f"AURA {provider} {instance}"
