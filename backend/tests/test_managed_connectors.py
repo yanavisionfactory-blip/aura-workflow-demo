@@ -68,6 +68,20 @@ async def test_connect_session_is_scoped_to_user_and_workspace():
     }
 
 
+@pytest.mark.parametrize("workspace", ["own", "other"])
+async def test_salesforce_connect_uses_only_its_workspaces_login_host(workspace):
+    config = dynamic_settings()
+    config.salesforce_workspace_domains = {"own": "company.my.salesforce.com"}
+    client = FakeNango([integration("crm", "salesforce"), {"data": {"connect_link": "https://connect"}}], config=config)
+    await client.create_session("salesforce", workspace, "user", integration_id="crm")
+    payload = client.calls[-1][2]["json"]
+    if workspace == "own":
+        assert payload["integrations_config_defaults"] == {"crm": {"connection_config": {
+            "hostname": "company.my.salesforce.com"}}}
+    else:
+        assert "integrations_config_defaults" not in payload
+
+
 def test_api_key_enables_managed_connections_without_static_map():
     client = FakeNango([], config=dynamic_settings())
 
