@@ -150,3 +150,19 @@ reads. Its executable operations are read-only. It does not stage or publish CMS
 drafts. Tokens are minted server-side for each invocation so their 24-hour expiry
 does not require users to copy a new token. Existing OAuth and broker connections
 retain their own routes.
+
+## Platform usage
+
+Set `PLATFORM_USAGE_ADMIN_IDS` on the API service to the comma-separated Clerk
+user IDs of the operators authorized to read cross-workspace usage. An empty
+setting disables access. After the deployment, an authorized operator can open
+**Account → Platform usage** in AURA. Workspace roles do not grant this access.
+
+The period filter applies to distinct Clerk sessions observed in visible,
+signed-in workspaces and runs created during the period. Session coverage begins
+with deployment. Refreshes, token refreshes and workspace switches reuse the
+same session. Display names come from the signed-in profile, while the Clerk
+user ID identifies each account. Run statuses and enabled, verified connections
+reflect their current state. Historical attribution uses recorded creation and
+connection events. Runs and connections without a recorded user remain in the
+platform totals.

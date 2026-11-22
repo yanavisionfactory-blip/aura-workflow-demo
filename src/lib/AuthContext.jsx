@@ -1,8 +1,9 @@
-import React, { useCallback, useContext, useLayoutEffect, useMemo, useState } from "react";
+import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { UserButton, useAuth as useClerkAuth, useUser } from "@clerk/react";
 import { AuthContext } from "@/lib/authState.mjs";
 
 import {
+  auraRequest,
   bootstrapWorkspace,
   clearWorkspace,
   createPythonWorkspace,
@@ -23,6 +24,7 @@ export const AuthProvider = ({ children }) => {
   const { user } = useUser();
   const [workspace, setWorkspace] = useState(null);
   const [workspaces, setWorkspaces] = useState([]);
+  const [usageAdminId, setUsageAdminId] = useState(null);
   const [workspaceError, setWorkspaceError] = useState(null);
   const [isLoadingWorkspace, setIsLoadingWorkspace] = useState(false);
   const [reconnectSequence, setReconnectSequence] = useState(0);
@@ -40,6 +42,7 @@ export const AuthProvider = ({ children }) => {
   }, [clerk.isLoaded, clerk.isSignedIn]);
 
   useLayoutEffect(() => {
+    setUsageAdminId(null);
     if (!clerk.isLoaded) return;
     if (!clerk.isSignedIn) {
       clearWorkspace();
@@ -70,6 +73,7 @@ export const AuthProvider = ({ children }) => {
             || rows.find((row) => row.workspace_id === active.workspace_id) || rows[0];
           if (!selected) throw new Error("No workspace is available for this account");
           selectWorkspace(selected.workspace_id);
+          setUsageAdminId(active.platform_usage_admin ? clerk.userId : null);
           setWorkspace(selected);
           setWorkspaces(rows);
           return;
@@ -90,6 +94,28 @@ export const AuthProvider = ({ children }) => {
       cancelled = true;
     };
   }, [clerk.isLoaded, clerk.isSignedIn, clerk.userId, clerk.orgId, reconnectSequence]);
+
+  const workspaceId = workspace?.workspace_id;
+  const displayName = user?.fullName || user?.username || "";
+  useEffect(() => {
+    if (!workspaceId || !clerk.sessionId || !clerk.isSignedIn) return;
+    const controller = new AbortController();
+    const observe = () => {
+      if (document.visibilityState !== "visible") return;
+      void auraRequest("/v1/usage/session", {
+        method: "POST", signal: controller.signal, workspaceId, timeoutMs: 10000,
+        body: JSON.stringify({ display_name: displayName.slice(0, 160) }),
+      }).catch(() => {}); // Retry on the next visible visit without interrupting work.
+    };
+    observe();
+    const timer = window.setInterval(observe, 5 * 60 * 1000);
+    document.addEventListener("visibilitychange", observe);
+    return () => {
+      controller.abort();
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", observe);
+    };
+  }, [clerk.isSignedIn, clerk.sessionId, workspaceId, displayName]);
 
   const reconnectWorkspace = useCallback(() => {
     setReconnectSequence((value) => value + 1);
@@ -115,6 +141,7 @@ export const AuthProvider = ({ children }) => {
 
   const value = useMemo(() => ({
     accountControl: <UserButton />,
+    canReadUsage: Boolean(clerk.userId && usageAdminId === clerk.userId),
     user,
     workspace,
     workspaces,
@@ -127,7 +154,7 @@ export const AuthProvider = ({ children }) => {
     refreshWorkspaces,
     reconnectWorkspace,
     logout,
-  }), [user, workspace, workspaces, workspaceError, clerk.isSignedIn, clerk.isLoaded, isLoadingWorkspace, chooseWorkspace, createWorkspace, refreshWorkspaces, reconnectWorkspace, logout]);
+  }), [user, usageAdminId, clerk.userId, workspace, workspaces, workspaceError, clerk.isSignedIn, clerk.isLoaded, isLoadingWorkspace, chooseWorkspace, createWorkspace, refreshWorkspaces, reconnectWorkspace, logout]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };

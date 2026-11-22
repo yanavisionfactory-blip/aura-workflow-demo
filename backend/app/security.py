@@ -46,13 +46,14 @@ class CredentialVault:
             raise RuntimeError("Stored tool credentials cannot be decrypted") from exc
 
 
-def create_oauth_state(workspace_id: str, provider: str) -> str:
+def create_oauth_state(workspace_id: str, provider: str, subject: str | None = None) -> str:
     settings = get_settings()
     now = datetime.now(UTC)
     return jwt.encode(
         {
             "workspace_id": workspace_id,
             "provider": provider,
+            **({"sub": subject} if subject else {}),
             "nonce": secrets.token_urlsafe(16),
             "iat": now,
             "exp": now + timedelta(minutes=10),

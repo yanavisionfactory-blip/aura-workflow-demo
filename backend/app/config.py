@@ -134,6 +134,7 @@ class Settings(BaseSettings):
     clerk_jwt_key: str = ""
     clerk_jwks_url: str = ""
     clerk_issuer: str = ""
+    platform_usage_admin_ids: str = ""
     clerk_authorized_parties: str = ""
     # Enable only after configuring Clerk OAuth scopes, resource audience and PKCE.
     chatgpt_mcp_enabled: bool = False
