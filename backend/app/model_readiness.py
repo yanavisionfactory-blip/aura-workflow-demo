@@ -79,8 +79,13 @@ async def probe_direct_model() -> dict:
             result["ready"] = result["presentation_editor"]
         return result
     except Exception as exc:  # noqa: BLE001 - readiness must fail closed without provider payloads
-        # Function names and line numbers identify a broken contract without recording prompts or provider messages.
+        from .presentation_draft import PresentationEditorialError
+
+        # Only this isolated, hardcoded fixture may report its editorial feedback.
+        fixture_feedback = {}
+        if settings.canary_mode and stage == "sample_composition" and isinstance(exc, PresentationEditorialError):
+            fixture_feedback["synthetic_editor_feedback"] = exc.issues[:3]
         trace = [f"{frame.name}:{frame.lineno}" for frame in extract_tb(exc.__traceback__)]
-        return {"ready": False, "model": settings.openai_model, "probe_stage": stage, "trace": trace[-5:],
+        return {"ready": False, "model": settings.openai_model, "probe_stage": stage, "trace": trace[-5:], **fixture_feedback,
                 "error_type": type(exc).__name__, "status_code": getattr(exc, "status_code", None),
                 "quota_exhausted": is_model_quota_error(exc)}

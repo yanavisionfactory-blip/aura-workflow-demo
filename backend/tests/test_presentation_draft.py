@@ -278,6 +278,12 @@ async def test_incomplete_portuguese_pitch_is_rewritten_and_rechecked(monkeypatc
     assert parse.await_count == 4
     repair = parse.await_args_list[2].kwargs["input"]
     assert "editor_feedback" in repair and SOURCES[0]["content"] in repair
+    import json
+
+    first_review = json.loads(parse.await_args_list[1].kwargs["input"])
+    final_review = json.loads(parse.await_args_list[3].kwargs["input"])
+    assert first_review["sources"] == SOURCES and not first_review["previous_issues"]
+    assert final_review["sources"] == SOURCES and final_review["previous_issues"] == issues["issues"]
 
 
 async def test_public_page_and_drive_materials_both_reach_composition(monkeypatch):
