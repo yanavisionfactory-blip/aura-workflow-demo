@@ -138,13 +138,20 @@ async def compose_presentation(request) -> dict:
         payload["public_source_ids"] = [s.id for s in public_sources]
     for attempt in range(2):
         draft, execution = await _generate("Presentation Composer", instructions, payload, PresentationDraft)
-        _check_source_ids(request, draft)
-        review = await review_copy(request, draft)
-        if not review.issues:
-            break
-        if attempt:
-            raise ValueError("Presentation needs editorial revision: " + " ".join(review.issues))
-        payload = {**payload, "previous_draft": draft.model_dump(mode="json"), "editor_feedback": review.issues}
+        try:
+            _check_source_ids(request, draft)
+        except ValueError as exc:
+            if attempt:
+                raise
+            issues = [str(exc) + ". Use these exact IDs: " + ", ".join(source.id for source in request.sources)]
+        else:
+            review = await review_copy(request, draft)
+            if not review.issues:
+                break
+            issues = review.issues
+            if attempt:
+                raise ValueError("Presentation needs editorial revision: " + " ".join(issues))
+        payload = {**payload, "previous_draft": draft.model_dump(mode="json"), "editor_feedback": issues}
     presentation = {
         "title": draft.title, "subtitle": draft.subtitle, "layout": "slides",
         "phases": [slide.model_dump(exclude={"source_ids"}) for slide in draft.phases],
