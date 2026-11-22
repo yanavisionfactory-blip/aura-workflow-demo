@@ -165,3 +165,58 @@ async def test_delete_account_handles_no_content_without_hiding_rejection(broker
     assert transport.request.await_args.args == (
         "DELETE", "https://api.pipedream.com/v1/connect/proj_test/accounts/apn_deleted",
     )
+
+
+@pytest.mark.parametrize("sandbox", [False, True])
+async def test_salesforce_connect_selects_instance_and_reconnect_keeps_it(broker, database, sandbox):
+    config, client = broker
+    vendor = "salesforce_rest_api"
+    provider = "salesforce-rest-api"
+    instance = "sandbox" if sandbox else "production"
+    context = main.TenantContext("workspace", "customer", "owner")
+    client.list_actions.return_value = [{
+        "key": f"{vendor}-list-records", "version": "1.0", "name": "List records",
+        "annotations": {"readOnlyHint": True},
+        "configurable_props": [{"name": vendor, "type": "app", "app": vendor}],
+    }]
+    client.list_accounts.return_value = [{"id": "apn_sf", "healthy": True, "app": {"name_slug": vendor}}]
+    client.salesforce_login_override = AsyncMock(return_value=f"ao_{instance}")
+    async with database() as session:
+        session.add(Workspace(id="workspace", name="CRM"))
+        await certify_app(session, client, {
+            "name_slug": vendor, "name": "Salesforce", "auth_type": "oauth", "has_actions": True,
+        }, config)
+        await session.commit()
+        consent = await main.create_connector_broker_session(provider, context=context, session=session,
+                                                            salesforce_sandbox=sandbox)
+        assert consent["salesforce_instance"] == instance
+        assert consent["app_override_id"] == f"ao_{instance}"
+        assert consent["account_id"] is None
+        assert consent["project_environment"] == "production"
+        client.salesforce_login_override.assert_awaited_once_with(vendor, instance)
+        result = await main.complete_connector_broker_connection(provider, main.ConnectorBrokerComplete(
+            account_id="apn_sf", authorization_state=consent["authorization_state"],
+        ), context=context, session=session)
+        tool = await session.get(ToolConnection, result["connection_id"])
+        assert tool.config["salesforce_instance"] == instance
+        reconnect = await main.create_connector_broker_session(provider, tool.id, context, session)
+        assert reconnect["salesforce_instance"] == instance
+        assert reconnect["account_id"] == "apn_sf"
+        reused = await main.create_connector_broker_session(provider, context=context, session=session,
+                                                           salesforce_sandbox=sandbox)
+        assert reused["already_connected"] and reused["salesforce_instance"] == instance
+
+        if not sandbox:
+            with pytest.raises(main.HTTPException) as refused:
+                await main.create_connector_broker_session(provider, context=context, session=session,
+                                                           salesforce_sandbox=True)
+            assert refused.value.status_code == 409
+
+        # An older grant can be either type. Reconnect its original account.
+        tool.config = {k: v for k, v in tool.config.items() if k != "salesforce_instance"}
+        await session.commit()
+        client.salesforce_login_override.reset_mock()
+        legacy = await main.create_connector_broker_session(provider, tool.id, context, session)
+        assert legacy["account_id"] == "apn_sf"
+        assert "app_override_id" not in legacy
+        client.salesforce_login_override.assert_not_awaited()

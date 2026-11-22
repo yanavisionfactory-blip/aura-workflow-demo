@@ -167,13 +167,13 @@ export default function ConnectionsPill() {
   const count = connectedTools.length + agentCards.length;
   const stacked = [...connectedTools, ...agentCards].slice(0, 4);
 
-  const connect = async (tool, inputMode) => {
+  const connect = async (tool, inputMode, { salesforceSandbox = false } = {}) => {
     if ((isMetaConnection(tool) && !connectionsLoaded) || !tool.connectable
       || (inputMode !== "upload" && (tool.connectionId || (tool.isConnected ?? connected[tool.name])))) return;
     setConnecting(tool.rowKey || tool.name);
     setError("");
     try {
-      const result = await connectTool(tool.name, { provider: tool.provider, inputMode });
+      const result = await connectTool(tool.name, { provider: tool.provider, inputMode, salesforceSandbox });
       if (result.inputAttached) {
         setImportNotice(`${result.document.name} is ready for your next workflow. This is an imported snapshot, not a live app connection.`);
         setTab("documents");
@@ -445,9 +445,17 @@ export default function ConnectionsPill() {
                               {requesting === tool.name ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}{requesting === tool.name ? "Requesting…" : "Request app"}
                             </button>
                           ) : tool.connectable ? (
-                            <button type="button" onClick={() => connect(tool)} disabled={Boolean(connecting) || (isMetaConnection(tool) && !connectionsLoaded)} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-50">
-                              {connecting === (tool.rowKey || tool.name) ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}{connecting === (tool.rowKey || tool.name) ? "Opening…" : "Connect"}
-                            </button>
+                            <div className="flex flex-col items-end">
+                              <button type="button" onClick={() => connect(tool)} disabled={Boolean(connecting) || (isMetaConnection(tool) && !connectionsLoaded)} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-50">
+                                {connecting === (tool.rowKey || tool.name) ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}{connecting === (tool.rowKey || tool.name) ? "Opening…" : "Connect"}
+                              </button>
+                              {tool.connectionBackend === "pipedream" && /^salesforce(?:[-_]rest[-_]api)?(?:[-_]mcp)?$/.test(tool.provider) && (
+                                <button type="button" onClick={() => connect(tool, undefined, { salesforceSandbox: true })} disabled={Boolean(connecting)}
+                                  className="rounded-lg px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50">
+                                  Use a test account
+                                </button>
+                              )}
+                            </div>
                           ) : (
                             <span className="rounded-full border border-amber-400/20 bg-amber-400/5 px-2 py-1 text-[10px] text-amber-300">{tool.availability === "requested" ? "Requested" : "Coming soon"}</span>
                           )}

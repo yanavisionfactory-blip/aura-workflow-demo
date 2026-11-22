@@ -128,6 +128,7 @@ async function connectToolAttempt(toolName, opts) {
       sameTab,
       signal: opts.signal,
       onProgress: opts.onProgress,
+      salesforceSandbox: opts.salesforceSandbox,
     });
 
     if (result.redirecting) {

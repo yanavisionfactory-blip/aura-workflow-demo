@@ -187,3 +187,24 @@ test("new accounts renew with no existing connection or provider account id", as
   assert.equal(context.completions[0].connection_id, null);
   assert.equal(context.completions[0].authorization_state, "state-2");
 });
+
+test("Salesforce work and test sign-in pass the selected preset to the hosted form on every attempt", async () => {
+  for (const sandbox of [false, true]) {
+    const instance = sandbox ? "sandbox" : "production";
+    const settings = { provider: "salesforce-rest-api", app: "salesforce_rest_api", account_id: null,
+      connection_id: null, salesforce_instance: instance, app_override_id: `ao_${instance}` };
+    const context = fixture({ sessions: [grant(1, settings), grant(2, settings)] });
+    await flow.authorizeConnectorBroker(settings.provider, { salesforceSandbox: sandbox, timeoutMs: 1000 });
+    assert.deepEqual(context.opened.map((url) => url.searchParams.get("appOverrideId")),
+      [settings.app_override_id, settings.app_override_id]);
+    const starts = context.requests.filter((url) => url.pathname.endsWith("/session"));
+    assert.ok(starts.every((url) => url.searchParams.get("salesforce_sandbox") === (sandbox ? "true" : null)));
+    assert.equal(context.completions.length, 1);
+  }
+});
+
+test("test-account sign-in stops before opening consent on an older or mismatched server", async () => {
+  const context = fixture({ sessions: [grant(1, { provider: "salesforce", app: "salesforce" })] });
+  await assert.rejects(flow.authorizeConnectorBroker("salesforce", { salesforceSandbox: true }), /test account/);
+  assert.deepEqual(context.opened, []);
+});
