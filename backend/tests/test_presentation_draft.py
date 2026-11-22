@@ -292,3 +292,18 @@ async def test_public_page_and_drive_materials_both_reach_composition(monkeypatc
     result = await presentation_draft.compose_presentation(request)
     assert result["sources"] == [*SOURCES, public]
     assert "https://example.com/report" in parse.await_args_list[0].kwargs["input"]
+
+
+async def test_rewritten_source_ids_still_need_editor_review(monkeypatch):
+    from copy import deepcopy
+
+    invalid = deepcopy(DRAFT)
+    invalid["phases"][0]["source_ids"] = ["unknown"]
+    parse = model_stub(monkeypatch)
+    parse.side_effect = [SimpleNamespace(output_parsed=invalid), SimpleNamespace(output_parsed=DRAFT),
+                         SimpleNamespace(output_parsed={"issues": []})]
+    result = await presentation_draft.compose_presentation(ReportRequest(
+        title="Café pitch", instructions="Pitch a listening trial", presentation=True, sources=SOURCES))
+    assert "[source_1]" in result["body"]
+    assert "Use these exact IDs: source_1" in parse.await_args_list[1].kwargs["input"]
+    assert parse.await_args_list[2].kwargs["text_format"] is presentation_draft.EditorialReview
