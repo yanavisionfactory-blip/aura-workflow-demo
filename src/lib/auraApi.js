@@ -212,6 +212,7 @@ export async function createConnectorBrokerSession(provider, connectionId = null
   await ensureWorkspace();
   const params = new URLSearchParams();
   if (connectionId) params.set("connection_id", connectionId);
+  if (options.salesforceSandbox) params.set("salesforce_sandbox", "true");
   const query = params.size ? `?${params.toString()}` : "";
   const session = await request(`/v1/connector-broker/${encodeURIComponent(provider)}/session${query}`, {
     method: "POST",
@@ -227,6 +228,10 @@ export async function createConnectorBrokerSession(provider, connectionId = null
   if (googleApps[provider] && (session.provider !== provider
     || (session.backend === "pipedream" && session.app !== googleApps[provider]))) {
     throw new Error("AURA received a connection for a different app. Please retry the app you selected.");
+  }
+  if (options.salesforceSandbox && (session.backend !== "pipedream" || session.salesforce_instance !== "sandbox"
+    || (!session.already_connected && !session.app_override_id))) {
+    throw new Error("Salesforce test account sign-in is unavailable.");
   }
   return session;
 }
@@ -458,11 +463,13 @@ async function authorizePipedreamConnector(provider, session, timeoutMs, control
       if (settled) return;
       if (renewed) throw new Error(expiredMessage);
       renewed = true;
-      const refreshed = await createConnectorBrokerSession(provider, session.connection_id, { signal: controller.signal });
+      const refreshed = await createConnectorBrokerSession(provider, session.connection_id, {
+        signal: controller.signal, salesforceSandbox: controls.salesforceSandbox,
+      });
       if (settled) return;
       // A new grant and its completion state travel together. Never switch the
       // app, tenant, environment or selected account while recovering consent.
-      const identity = ["backend", "provider", "app", "external_user_id", "project_environment", "connection_id", "account_id"];
+      const identity = ["backend", "provider", "app", "external_user_id", "project_environment", "connection_id", "account_id", "app_override_id", "salesforce_instance"];
       if (!refreshed.token || identity.some((key) => (refreshed[key] ?? null) !== (session[key] ?? null))) {
         throw new Error("AURA could not renew this connection. Click Connect to try again. Your work is saved.");
       }
@@ -495,6 +502,7 @@ async function authorizePipedreamConnector(provider, session, timeoutMs, control
         app: current.app || provider,
         token: current.token,
         accountId: current.account_id || undefined,
+        appOverrideId: current.app_override_id || undefined,
         customOauthClient: false,
         onSuccess: ({ id }) => {
           if (settled || attemptFinished) return;
@@ -532,13 +540,13 @@ async function authorizePipedreamConnector(provider, session, timeoutMs, control
 
 export async function authorizeConnectorBroker(
   provider,
-  { connection = null, timeoutMs = null, reservedWindow = null, sameTab = false, signal, onProgress } = {},
+  { connection = null, timeoutMs = null, reservedWindow = null, sameTab = false, signal, onProgress, salesforceSandbox = false } = {},
 ) {
   if (signal?.aborted) throw signal.reason;
   onProgress?.({ phase: "preparing" });
   let session;
   try {
-    session = await createConnectorBrokerSession(provider, connection?.id || null, { signal });
+    session = await createConnectorBrokerSession(provider, connection?.id || null, { signal, salesforceSandbox });
     if (signal?.aborted) throw signal.reason;
   } catch (error) {
     if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
@@ -556,7 +564,7 @@ export async function authorizeConnectorBroker(
     if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
     // Match the broker grant's default lifetime: account sign-in and multiple
     // verification factors routinely take longer than the old two-minute wait.
-    return authorizePipedreamConnector(provider, session, timeoutMs ?? 15 * 60 * 1000, { signal, onProgress });
+    return authorizePipedreamConnector(provider, session, timeoutMs ?? 15 * 60 * 1000, { signal, onProgress, salesforceSandbox });
   }
   if (session.backend === "shopify_client_credentials") {
     if (reservedWindow && !reservedWindow.closed) reservedWindow.close();

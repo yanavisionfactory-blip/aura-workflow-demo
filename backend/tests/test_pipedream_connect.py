@@ -35,6 +35,7 @@ from app.models import (
 from app.pipedream_connect import (
     PipedreamClient,
     PipedreamConnectError,
+    _salesforce_instance_field,
     app_uses_managed_oauth,
     certify_app,
     compile_action_manifest,
@@ -1384,3 +1385,45 @@ def test_google_workspace_connection_satisfies_calendar_marketplace_requirement(
         provider_hint="google-calendar", reason="Calendar is required",
     )
     assert main._requirement_accepts_tool(requirement, tool) is True
+
+
+@pytest.mark.parametrize("instance,value", [("production", "login"), ("sandbox", "test")])
+async def test_salesforce_overrides_use_the_connectors_option_and_project(instance, value):
+    client = PipedreamClient(settings())
+    vendor = "salesforce_rest_api"
+    client.get_app = AsyncMock(return_value={
+        "name_slug": vendor, "custom_fields_json": json.dumps([{
+            "name": "login_type", "type": "options", "options": [
+                {"label": "Sandbox instance", "value": "test"},
+                {"label": "Production instance", "value": "login"},
+            ],
+        }]),
+    })
+    row = {"id": f"ao_{value}", "app": {"name_slug": vendor}, "owner_id": "proj_abc123",
+           "name": f"AURA {vendor} {instance}", "cfmap": {"login_type": value}}
+    page = {"data": [{**row, "id": "ao_parent", "owner_id": "o_parent"}]}
+    client._request = AsyncMock(side_effect=[page, row])
+    assert await client.salesforce_login_override(vendor, instance) == row["id"]
+    assert client._request.await_args.kwargs["json"] == {
+        "name": row["name"], "app": vendor, "cfmap": row["cfmap"],
+    }
+    # A parallel first connection won the unique-name race.
+    client._request = AsyncMock(side_effect=[page, PipedreamConnectError("Conflict", status_code=409),
+                                            {"data": [row]}])
+    assert await client.salesforce_login_override(vendor, instance) == row["id"]
+    client._request = AsyncMock(return_value={"data": [row]})
+    assert await client.salesforce_login_override(vendor, instance) == row["id"]
+    assert client._request.await_count == 1
+    client.get_app.return_value["custom_fields_json"] = "[]"
+    with pytest.raises(PipedreamConnectError):
+        await client.salesforce_login_override(vendor, instance)
+
+@pytest.mark.parametrize("field,expected", [
+    ({"name": "is_sandbox", "type": "boolean"}, (False, True)),
+    ({"name": "yourinstance", "type": "string",
+      "description": "Use login for production and test for sandbox."}, ("login", "test")),
+])
+def test_salesforce_instance_alternate_forms(field, expected):
+    app = {"custom_fields_json": [field]}
+    assert [_salesforce_instance_field(app, env)[field["name"]]
+            for env in ("production", "sandbox")] == list(expected)

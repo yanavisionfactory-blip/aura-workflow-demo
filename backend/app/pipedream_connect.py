@@ -239,6 +239,38 @@ def _custom_fields(app: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in raw or [] if isinstance(item, dict)] if isinstance(raw, list) else []
 
 
+def is_salesforce_app(provider: str) -> bool:
+    return canonical_provider_slug(provider) in {"salesforce", "salesforce-rest-api"}
+
+
+def _salesforce_instance_field(app: dict, instance: str) -> dict:
+    """Use the values from Salesforce's published connector form."""
+    for field in _custom_fields(app):
+        name = field.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        if field.get("type") == "boolean" and _slug(name) in {"sandbox", "is-sandbox", "use-sandbox"}:
+            return {name: instance == "sandbox"}
+        # Some Salesforce forms ask for the login subdomain as free text.
+        if field.get("type") in {"string", "text"}:
+            description = str(field.get("description", "")).lower()
+            if name == "yourinstance" and all(re.search(rf"\b{word}\b", description)
+                                               for word in ("login", "production", "test", "sandbox")):
+                return {name: "test" if instance == "sandbox" else "login"}
+        if field.get("type") != "options":
+            continue
+        choices = {}
+        for option in field.get("options") or []:
+            if not isinstance(option, dict) or not isinstance(option.get("value"), str):
+                continue
+            for kind in ("production", "sandbox"):
+                if re.search(rf"\b{kind}\b", str(option.get("label", "")), re.IGNORECASE):
+                    choices[kind] = option["value"]
+        if choices.keys() == {"production", "sandbox"} and choices["production"] != choices["sandbox"]:
+            return {name: choices[instance]}
+    raise PipedreamConnectError("Salesforce sign-in is temporarily unavailable.")
+
+
 def _is_mcp_app(app: dict[str, Any]) -> bool:
     values = [
         app.get("name_slug"),
@@ -669,6 +701,51 @@ class PipedreamClient:
         if slug != _slug(provider):
             raise PipedreamConnectError("This app is not available", retryable=False)
         return data
+
+    async def salesforce_login_override(self, provider: str, instance: str) -> str:
+        if not is_salesforce_app(provider) or instance not in {"production", "sandbox"}:
+            raise ValueError("Unknown Salesforce sign-in route")
+        app = await self.get_app(provider)
+        fields = _salesforce_instance_field(app, instance)
+        project = self.settings.pipedream_project_id
+        path = f"/v1/connect/{quote(project, safe='')}/app_overrides"
+        name = f"AURA {provider} {instance}"
+
+        def matches(row: dict) -> bool:
+            return (row.get("name") == name and row.get("owner_id") == project
+                    and (row.get("app") or {}).get("name_slug") == app["name_slug"]
+                    and row.get("cfmap") == fields and not row.get("oauth_app_id")
+                    and isinstance(row.get("id"), str) and bool(row["id"]))
+
+        async def find_existing() -> str | None:
+            params = {"app": provider, "limit": 100}
+            while True:
+                page = await self._request("GET", path, params=params)
+                rows = page.get("data", [])
+                for row in rows:
+                    if matches(row):
+                        return row["id"]
+                cursor = (page.get("page_info") or {}).get("end_cursor")
+                if not rows or not cursor or cursor == params.get("after"):
+                    return None
+                params["after"] = cursor
+
+        existing = await find_existing()
+        if existing:
+            return existing
+        try:
+            created = await self._request("POST", path, json={"app": provider, "name": name, "cfmap": fields})
+        except PipedreamConnectError as exc:
+            # The name is unique per project. A parallel first sign-in or a lost
+            # response may already have created this exact preset.
+            if exc.status_code in {400, 409, 422} or exc.effect_uncertain:
+                existing = await find_existing()
+                if existing:
+                    return existing
+            raise
+        if not matches(created):
+            raise PipedreamConnectError("Salesforce sign-in could not be prepared.")
+        return created["id"]
 
     async def create_connect_token(self, external_user_id: str) -> dict[str, Any]:
         result = await self._request(

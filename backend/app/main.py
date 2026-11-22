@@ -142,6 +142,7 @@ from .pipedream_connect import (
     connection_environment,
     connection_setup_label,
     connection_strategy,
+    is_salesforce_app,
     opaque_external_user_id,
     pipedream_client,
     pipedream_client_for_environment,
@@ -2596,6 +2597,7 @@ async def _activate_pipedream_account_family(
     external_user_id: str,
     verification: dict,
     environment: str | None = None,
+    salesforce_instance: str | None = None,
 ) -> tuple[ToolConnection, list[ToolConnection], list[str]]:
     """Attach every certified action/MCP route to one opaque managed account."""
     vendor_app = _pipedream_pack_vendor_app(requested_pack)
@@ -2653,6 +2655,7 @@ async def _activate_pipedream_account_family(
         tool.external_connection_id = account_id if tool is holder else None
         tool.external_account_id = account_id
         tool.config = {
+            **({"salesforce_instance": salesforce_instance} if salesforce_instance else {}),
             "managed_by": "pipedream",
             "pipedream_environment": environment or settings.pipedream_environment,
             "external_user_id": external_user_id,
@@ -2717,10 +2720,13 @@ async def create_connector_broker_session(
     connection_id: str | None = None,
     context: TenantContext = Depends(tenant_context),
     session: AsyncSession = Depends(tenant_session),
+    salesforce_sandbox: bool = False,
 ) -> dict:
     """Select the best connector plane and return only a short-lived browser grant."""
     provider = requested_marketplace_entry(provider)["provider"]
     provider = wordpress_plugins.provider_slug(provider)
+    if salesforce_sandbox and not is_salesforce_app(provider):
+        raise HTTPException(422, "Test account sign-in is available only for Salesforce")
     from . import desktop_estimating
     if provider in desktop_estimating.PROVIDERS:
         if connection_id:
@@ -2806,15 +2812,18 @@ async def create_connector_broker_session(
         except zernio_connect.ZernioError as exc:
             raise HTTPException(503 if exc.retryable else 409, {"code": exc.code, "message": str(exc)}) from None
     pipedream_only = provider in PROVIDERS and PROVIDERS[provider].pipedream_only
-    # A signed managed Google route is suitable for new external users. An
-    # unrelated Nango integration or broad AURA Google client must not win
-    # simply because it exists. Reconnects remain pinned to their stored backend.
+    # New Salesforce and Google sign-ins prefer their released managed app.
+    # Reconnects stay pinned to the backend that owns the account.
     preferred_pipedream = bool(
-        not selected_tool and provider in PUBLIC_GOOGLE_CONNECTORS
+        not selected_tool and (provider in PUBLIC_GOOGLE_CONNECTORS or is_salesforce_app(provider))
         and pipedream_client().configured
         and await released_pipedream_pack(session, provider)
     )
     nango_release = None if provider in PROVIDERS else await released_connector(session, provider)
+    if salesforce_sandbox:
+        if selected_tool and selected_backend != "pipedream":
+            raise HTTPException(409, "This connection already uses a different sign-in method")
+        preferred_pipedream = True
     if selected_tool and selected_backend not in {"nango", "pipedream"}:
         result = await reconnect_connection(
             connection_id=selected_tool.id,
@@ -2922,6 +2931,21 @@ async def create_connector_broker_session(
             ),
             None,
         )
+        salesforce_instance = None
+        if is_salesforce_app(vendor_app):
+            # Preserve existing grants, including legacy sandboxes whose
+            # Salesforce environment predates AURA's app overrides.
+            existing_account = reusable
+            if selected_tool and selected_tool.enabled and _pipedream_account_id(selected_tool):
+                existing_account = selected_tool
+            if existing_account:
+                salesforce_instance = (existing_account.config or {}).get("salesforce_instance")
+                if salesforce_sandbox and salesforce_instance != "sandbox":
+                    raise HTTPException(409, "A different Salesforce account is already connected.")
+            else:
+                salesforce_instance = "sandbox" if salesforce_sandbox else "production"
+        elif salesforce_sandbox:
+            raise HTTPException(409, "This connector does not support Salesforce test accounts")
         # An explicit reconnect must offer fresh consent even when the old
         # account still passes a health check. Health alone does not prove
         # that its OAuth grant includes the requested write permissions.
@@ -2940,6 +2964,7 @@ async def create_connector_broker_session(
                     external_user_id=external_user_id,
                     verification=verification,
                     environment=environment,
+                    salesforce_instance=(reusable.config or {}).get("salesforce_instance"),
                 )
                 session.add(
                     AuditEvent(
@@ -2963,12 +2988,16 @@ async def create_connector_broker_session(
                     "provider": provider,
                     "app": vendor_app,
                     "already_connected": True,
+                    **({"salesforce_instance": salesforce_instance} if salesforce_instance else {}),
                     "connected": True,
                     "connection_id": tool.id,
                     "tool_connection_id": tool.id,
                     "activated_routes": [item.slug for item in activated],
                     "resumed_run_ids": resumed_run_ids,
                 }
+        app_override = None
+        if salesforce_instance:
+            app_override = await client.salesforce_login_override(vendor_app, salesforce_instance)
         grant = await client.create_connect_token(external_user_id)
     except PipedreamConnectError as exc:
         raise HTTPException(503 if exc.retryable else 409, str(exc)) from exc
@@ -2992,6 +3021,7 @@ async def create_connector_broker_session(
         "backend": "pipedream",
         "provider": provider,
         "app": vendor_app,
+        **({"app_override_id": app_override, "salesforce_instance": salesforce_instance} if app_override else {}),
         "token": grant["token"],
         "expires_at": grant.get("expires_at"),
         "external_user_id": external_user_id,
@@ -3000,6 +3030,7 @@ async def create_connector_broker_session(
             "aud": "aura-broker-complete", "workspace_id": context.workspace_id,
             "sub": context.subject, "provider": provider,
             "environment": environment,
+            **({"salesforce_instance": salesforce_instance} if salesforce_instance else {}),
             "connection_id": selected_tool.id if selected_tool else None, "iat": datetime.now(UTC),
             "exp": datetime.now(UTC) + timedelta(minutes=15),
         }, settings.session_signing_key, algorithm="HS256"),
@@ -3159,6 +3190,7 @@ async def complete_connector_broker_connection(
         ):
             raise HTTPException(404, "Connection not found")
     environment = connection_environment(selected_tool, settings) if selected_tool else settings.pipedream_environment
+    salesforce_instance = (selected_tool.config or {}).get("salesforce_instance") if selected_tool else None
     if payload.authorization_state:
         try:
             state = jwt.decode(payload.authorization_state, settings.session_signing_key,
@@ -3168,6 +3200,7 @@ async def complete_connector_broker_connection(
                     or state.get("provider") != provider or state.get("connection_id") != payload.connection_id):
                 raise jwt.InvalidTokenError("Authorization context changed")
             environment = state.get("environment")
+            salesforce_instance = state.get("salesforce_instance", salesforce_instance)
         except jwt.InvalidTokenError as exc:
             raise HTTPException(409, "Restart this connection to renew authorization") from exc
     client = pipedream_client() if environment == settings.pipedream_environment else pipedream_client_for_environment(environment)
@@ -3197,6 +3230,7 @@ async def complete_connector_broker_connection(
         external_user_id=external_user_id,
         verification=verification,
         environment=environment,
+        salesforce_instance=salesforce_instance,
     )
     session.add(
         AuditEvent(
