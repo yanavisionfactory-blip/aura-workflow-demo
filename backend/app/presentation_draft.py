@@ -130,9 +130,12 @@ async def compose_presentation(request) -> dict:
         "label the slides as fictional demo data. "
         f"Composition date: {datetime.now(UTC).date().isoformat()}."
     )
-    if request.public_sources:
+    public_sources = request.public_sources
+    if public_sources:
         request = request.model_copy(update={"sources": request.sources + request.public_sources, "public_sources": []})
     payload = request.model_dump(mode="json", exclude={"public_sources"})
+    if public_sources:
+        payload["public_source_ids"] = [s.id for s in public_sources]
     for attempt in range(2):
         draft, execution = await _generate("Presentation Composer", instructions, payload, PresentationDraft)
         _check_source_ids(request, draft)
@@ -157,6 +160,11 @@ async def compose_presentation(request) -> dict:
                      "\n".join(f"- {item}" for item in slide.items),
                      "Sources: " + ", ".join(f"[{source}]" for source in slide.source_ids)]
     sections += ["## Limitations", "\n".join(f"- {item}" for item in draft.limitations)]
+    for source in public_sources:
+        for line in source.content.splitlines():
+            if line.startswith("Source URL: https://"):
+                sections.append(f"[{source.id}] {line}")
+                break
     if draft.excluded_sources:
         sections += ["## Sources reviewed but not used", "\n".join(
             f"- [{source.source_id}]: {source.reason}" for source in draft.excluded_sources)]

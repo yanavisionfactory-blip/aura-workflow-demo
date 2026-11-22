@@ -1538,7 +1538,11 @@ class ProviderExecutor:
         return await search_public_web(a)
 
     async def _web_page_read(self, a: dict) -> dict:
-        return await self._browser_worker_request("/v1/read", {"url": a["url"]})
+        page = await self._browser_worker_request("/v1/read", {"url": a["url"]})
+        limit = a.get("max_text_chars")
+        if limit and isinstance(page.get("text"), str) and len(page["text"]) > limit:
+            return {**page, "text": page["text"][:limit], "text_truncated": True}
+        return page
 
     async def _creator_tiktok_screen(self, a: dict) -> dict:
         payload = {
