@@ -97,14 +97,20 @@ export const AuthProvider = ({ children }) => {
 
   const workspaceId = workspace?.workspace_id;
   const displayName = user?.fullName || user?.username || "";
+  const profileId = user?.id;
+  const email = user?.primaryEmailAddress?.emailAddress || "";
+  const joined = user?.createdAt?.toISOString();
+  const lastSignIn = user?.lastSignInAt?.toISOString();
   useEffect(() => {
-    if (!workspaceId || !clerk.sessionId || !clerk.isSignedIn) return;
+    if (!workspaceId || !clerk.sessionId || !clerk.isSignedIn || profileId !== clerk.userId) return;
     const controller = new AbortController();
     const observe = () => {
       if (document.visibilityState !== "visible") return;
       void auraRequest("/v1/usage/session", {
         method: "POST", signal: controller.signal, workspaceId, timeoutMs: 10000,
-        body: JSON.stringify({ display_name: displayName.slice(0, 160) }),
+        body: JSON.stringify({
+          display_name: displayName.slice(0, 160), email, joined, last_sign_in: lastSignIn,
+        }),
       }).catch(() => {}); // Retry on the next visible visit without interrupting work.
     };
     observe();
@@ -115,7 +121,7 @@ export const AuthProvider = ({ children }) => {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", observe);
     };
-  }, [clerk.isSignedIn, clerk.sessionId, workspaceId, displayName]);
+  }, [clerk.isSignedIn, clerk.sessionId, clerk.userId, workspaceId, displayName, profileId, email, joined, lastSignIn]);
 
   const reconnectWorkspace = useCallback(() => {
     setReconnectSequence((value) => value + 1);

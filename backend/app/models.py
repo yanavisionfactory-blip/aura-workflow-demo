@@ -1,10 +1,11 @@
 import enum
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     JSON,
     Boolean,
+    Date,
     DateTime,
     Enum,
     Float,
@@ -90,6 +91,18 @@ class UsageSession(Base):
     display_name: Mapped[str] = mapped_column(String(160), default="")
     first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class UsageProfile(Base):
+    __tablename__ = "usage_profiles"
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), primary_key=True
+    )
+    subject: Mapped[str] = mapped_column(String(240), primary_key=True)
+    email: Mapped[str] = mapped_column(String(320))
+    joined: Mapped[date] = mapped_column(Date)
+    last_sign_in: Mapped[date | None] = mapped_column(Date)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class PolicyConfig(Base):
