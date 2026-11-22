@@ -79,7 +79,9 @@ def _log_doc_readback_difference(expected: dict, observed: dict, status: str) ->
 
 async def check_provider_outcome(session, run, step, snapshot) -> dict:
     # The deadline includes credential refresh, all child reads and provider backoff.
-    timeout = 45.0
+    receipt = step.output.get("provider_result")
+    rendered_slides = isinstance(receipt, dict) and receipt.get("aura_transport") == "google_slides_populated_import_v2"
+    timeout = 180.0 if rendered_slides else 45.0
     from time import monotonic
 
     from .reliability import model_budget
@@ -203,7 +205,7 @@ async def _check_provider_outcome(session, run, step, snapshot) -> dict:
                 )
             observed = await asyncio.wait_for(
                 observe_check(executor, check),
-                timeout=40 if step.operation == "jira.issues.create_from_blocks" else 20,
+                timeout=175 if check.kind == "google_slides_pages" else 40 if step.operation == "jira.issues.create_from_blocks" else 20,
             )
             result = {
                 **evaluate_outcome_check(check, observed),
@@ -215,7 +217,7 @@ async def _check_provider_outcome(session, run, step, snapshot) -> dict:
             if step.operation == "docs.create" and result["status"] != "verified":
                 _log_doc_readback_difference(check.expected, observed, result["status"])
             # Eventual consistency can briefly expose old values; retry only the read.
-            if result["status"] in {"verified", "pending"}:
+            if result["status"] in {"verified", "pending"} or check.kind == "google_slides_pages":
                 break
         except Exception as exc:  # noqa: BLE001 - provider read-back failures use the shared classifier
             from .reliability import classify_failure

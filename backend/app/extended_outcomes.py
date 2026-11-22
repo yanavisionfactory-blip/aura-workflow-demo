@@ -48,8 +48,10 @@ def build_extended(operation, a, receipt):
         rid = str(receipt.get("presentationId") or saved.get("presentationId") or saved.get("id") or "")
         if not rid:
             raise ValueError("Google Slides did not return the created presentation identity")
+        kind = ("google_slides_pages" if a.get("presentation") and
+                receipt.get("aura_transport") == "google_slides_populated_import_v2" else "google_slides")
         return OutcomeCheck(read, {"presentationId": rid}, rid,
-                            {"presentation": a.get("presentation"), "title": a.get("title")}, "google_slides")
+                            {"presentation": a.get("presentation"), "title": a.get("title")}, kind)
     if operation == "x.posts.create":
         rid = str(receipt.get("data", {}).get("id") or "")
         return OutcomeCheck(read, {"post_id": rid}, rid, {"text": a["text"]}, "x_post")
@@ -185,7 +187,7 @@ def evaluate_extended(check, observed):
     from .outcome_checks import _matches, _same_id, evaluate_outcome_check
     def result(status, reason):
         return {"status": status, "reasons": [reason]}
-    if check.kind == "google_slides":
+    if check.kind in {"google_slides", "google_slides_pages"}:
         from .slides_materials import verify_slides
 
         saved = observed.get("ret", observed)
@@ -198,6 +200,13 @@ def evaluate_extended(check, observed):
                 return result("failed", str(exc))
         elif saved.get("title") != check.expected.get("title"):
             return result("failed", "Saved presentation title differs from the approved title")
+        if check.kind == "google_slides_pages":
+            review = observed.get("page_review") or {}
+            verdict = review.get("verification") or {}
+            if (review.get("design_id") != check.resource_id or verdict.get("status") != "verified"
+                    or review.get("page_count") != len(saved["slides"])):
+                return {"status": "unverified", "reasons": verdict.get("issues") or verdict.get("limitations")
+                        or ["Rendered Google Slides pages could not be verified"]}
         return result("verified", "Saved Google Slides content matches the approved presentation")
     if check.kind == "compound":
         rows = observed.get("checks", [])
@@ -293,6 +302,8 @@ def evaluate_extended(check, observed):
 
 async def observe_check(executor, check):
     """All calls here are read operations. Caller supplies shared time/request budgets."""
+    if check.kind == "google_slides_pages":
+        return await executor.inspect_google_slides(check)
     if check.kind == "broker_sheets_update":
         return await executor.read_sheet_cells(check.arguments)
     if check.kind == "compound":

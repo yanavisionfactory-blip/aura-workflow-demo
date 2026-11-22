@@ -42,7 +42,23 @@ async def probe_direct_model() -> dict:
                   "An unrelated search keyword glossary: AI music restaurants. No project facts or proposal."}])
             sources_ready = (reviewed["notes"].relevant and reviewed["notes"].excerpts == [notes]
                              and not reviewed["keywords"].relevant and not reviewed["keywords"].excerpts)
-            return {"ready": sources_ready, "model": settings.openai_model, "source_review": sources_ready}
+        result = {"ready": sources_ready, "model": settings.openai_model, "source_review": sources_ready}
+        if sources_ready and settings.canary_mode:
+            from .presentation_draft import PresentationDraft, compose_presentation, review_copy
+            from .reports import ReportRequest
+
+            brief = ReportRequest(title="Brisa", instructions="Pitch a listening trial to a café owner in European Portuguese.",
+                sources=[{"id": "brief", "title": "Notes", "content": "Original music for cafés."}], presentation=True)
+            broken = PresentationDraft(title="Música para restaurantr", subtitle="", phases=[{
+                "period": "Oferta", "title": "Ambiente para o seu “m", "items": ["Resumo da documentação."],
+                "source_ids": ["brief"]}], limitations=["Termos por confirmar."])
+            review = await review_copy(brief, broken)
+            if not review.issues:
+                return {**result, "ready": False, "presentation_editor": False}
+            sample = await compose_presentation(brief)
+            result["presentation_editor"] = bool(sample["presentation"]["phases"])
+            result["ready"] = result["presentation_editor"]
+        return result
     except Exception as exc:  # noqa: BLE001 - readiness must fail closed without provider payloads
         return {"ready": False, "model": settings.openai_model,
                 "error_type": type(exc).__name__, "status_code": getattr(exc, "status_code", None),

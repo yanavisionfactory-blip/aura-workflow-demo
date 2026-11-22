@@ -158,3 +158,35 @@ def test_saved_canva_recovery_and_explicit_replacement_do_not_require_creation()
     revision = original + "\n\nThe user reviewed the proposed workflow and requested this change: Replace this recovery plan with verification/export of the EXISTING Canva design only. Do not create a presentation."
     assert not source_presentation_requested(revision)
     assert source_presentation_requested(original)
+
+
+async def test_google_export_checks_images_of_created_file_and_retains_failed_page(monkeypatch):
+    from test_semantic_materials import DECK, Broker, saved_deck
+
+    from app.extended_outcomes import build_extended, evaluate_extended
+    from app.slides_materials import inspect_saved_export
+
+    data = pdf(["Ambient music Pilot Test background tracks with venues."])
+    def export(method, target, kwargs):
+        assert method == "GET" and "/created-presentation/export?mimeType=application%2Fpdf" in target
+        assert kwargs["response_bytes_limit"] <= 8 * 1024 * 1024
+        return data
+
+    verdict = visual(1)
+    verdict.pages[0].issues.append("Visible heading ends halfway through a word.")
+    class Client:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+
+    monkeypatch.setattr(review, "AsyncOpenAI", lambda **kwargs: Client())
+    model = AsyncMock(return_value=SimpleNamespace(output_parsed=verdict))
+    monkeypatch.setattr(review, "structured_response", model)
+    receipt = {"ret": saved_deck(), "aura_transport": "google_slides_populated_import_v2"}
+    check = build_extended("google-slides.create-presentation", {"presentation": DECK}, receipt)
+    report = await inspect_saved_export(Broker(export), "owner", "selected-account", check.resource_id, DECK)
+    assert report["evidence"]["page_images"][0]["sha256"]
+    assert report["evidence"]["kind"] == "actual_google_slides_pdf_text_and_page_images"
+    assert evaluate_extended(check, {**receipt, "page_review": report}) == {
+        "status": "unverified", "reasons": ["Page 1: Visible heading ends halfway through a word."]}

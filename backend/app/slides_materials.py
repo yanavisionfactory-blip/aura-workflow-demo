@@ -34,6 +34,25 @@ def verify_slides(result, presentation):
             raise ValueError("Saved slide text does not match the approved content")
 
 
+def _proxy(broker, target):
+    encoded = base64.urlsafe_b64encode(target.encode()).decode().rstrip("=")
+    return f"/v1/connect/{quote(broker.settings.pipedream_project_id, safe='')}/proxy/{encoded}"
+
+
+async def inspect_saved_export(broker, external_user_id, account_id, resource_id, expected):
+    from .file_delivery import MAX_FILE_BYTES
+    from .presentation_review import review_pdf
+
+    if not re.fullmatch(r"[A-Za-z0-9_-]{10,200}", resource_id):
+        raise ValueError("Invalid Google Slides presentation identity")
+    target = f"https://www.googleapis.com/drive/v3/files/{resource_id}/export?mimeType=application%2Fpdf"
+    data = await broker._request("GET", _proxy(broker, target),
+        params={"external_user_id": external_user_id, "account_id": account_id},
+        response_bytes_limit=MAX_FILE_BYTES)
+    return await review_pdf(data, expected, resource_id, "Inspect every saved Google Slides page.",
+                            provider="google_slides")
+
+
 async def execute(broker, external_user_id, account_id, arguments):
     from .pipedream_connect import PipedreamConnectError
 
@@ -54,14 +73,10 @@ async def execute(broker, external_user_id, account_id, arguments):
         + metadata + f"\r\n--{boundary}\r\nContent-Type: application/vnd.openxmlformats-officedocument.presentationml.presentation\r\n\r\n".encode()
         + pptx + f"\r\n--{boundary}--\r\n".encode())
 
-    def proxy(target):
-        encoded = base64.urlsafe_b64encode(target.encode()).decode().rstrip("=")
-        return f"/v1/connect/{quote(broker.settings.pipedream_project_id, safe='')}/proxy/{encoded}"
-
     routing = {"external_user_id": external_user_id, "account_id": account_id}
     # One non-retried mutation imports already populated slide bytes. There is
     # no blank create followed by a second possibly failed content mutation.
-    receipt = await broker._request("POST", proxy(
+    receipt = await broker._request("POST", _proxy(broker,
         "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType,webViewLink"),
         params=routing, headers={"Content-Type": "application/octet-stream",
             "x-pd-proxy-Content-Type": f"multipart/related; boundary={boundary}"},
@@ -72,7 +87,7 @@ async def execute(broker, external_user_id, account_id, arguments):
                                    retryable=False, effect_uncertain=True)
     url = f"https://docs.google.com/presentation/d/{resource_id}/edit"
     try:
-        saved = await broker._request("GET", proxy(
+        saved = await broker._request("GET", _proxy(broker,
             f"https://slides.googleapis.com/v1/presentations/{resource_id}"), params=routing)
         if saved.get("presentationId") != resource_id:
             raise ValueError("Saved presentation identity changed")
@@ -85,5 +100,5 @@ async def execute(broker, external_user_id, account_id, arguments):
     return {"ret": saved, "presentationId": resource_id, "url": url,
         "import_receipt": receipt, "verification": {"saved_content_matches": True,
             "slide_count": len(saved["slides"])},
-        "aura_transport": "google_slides_populated_import_v1",
+        "aura_transport": "google_slides_populated_import_v2",
         "exports": {"$summary": f"Created and verified {len(saved['slides'])} populated slides."}}

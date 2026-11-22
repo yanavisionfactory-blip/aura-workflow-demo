@@ -92,6 +92,20 @@ def _google_doc_url(value) -> bool:
         return False
 
 
+def _external_research_requested(prompt):
+    """Recognize explicit requests; a deck about an online business needs no web access."""
+    from .request_contracts import user_request_text
+
+    for clause in re.split(r"[.!?;\n]", user_request_text(prompt).casefold()):
+        if re.search(r"\b(?:don['’]t|do not|never|without|no)\b", clause):
+            continue
+        if re.search(r"\b(?:research|search|check|consult|read|use|cite)\s+(?:the\s+|reliable\s+)?"
+                     r"(?:public sources|external sources|(?:public )?web|internet)\b"
+                     r"|\b(?:include|add|use|conduct|do)\s+(?:some\s+)?(?:external|web|online) research\b", clause):
+            return True
+    return False
+
+
 def source_presentation_operation_pairs(prompt: str, inventory: list[dict]) -> set[tuple[str, str]]:
     """Keep supporting contracts already allowed by the route/omission catalog.
 
@@ -100,11 +114,13 @@ def source_presentation_operation_pairs(prompt: str, inventory: list[dict]) -> s
     """
     if not source_presentation_requested(prompt):
         return set()
+    research = _external_research_requested(prompt)
     canva_requested = canva_destination_requested(prompt)
     return {
         (item["slug"], operation)
         for item in inventory for operation in item.get("allowed_operations", [])
         if operation in SUPPORT_OPERATIONS
+        or (research and item["slug"] == "aura" and operation in {"web.search", "web.page.read"})
         # A generic deck request needs creation and read-back, not every
         # Slides edit/template operation. Reserving the whole provider catalog
         # can exhaust the planning budget before the model sees the request.
@@ -123,7 +139,9 @@ def source_presentation_requirements(prompt: str) -> list[str]:
         "requested location. Do not combine semantic_goal with query or drive. It inventories "
         "candidates, reads supported contents and verifies relevance by meaning, returning sources. "
         "Bind report.compose sources={{steps.discover.sources}} with presentation=true and an "
-        "explicit dependency. Do not add a first-file Google Docs read: discovery has already read "
+        "explicit dependency. When the brief asks for external research, use web.search and web.page.read, "
+        "then bind the read pages with URL and text as additional report.compose public_sources. Keep project "
+        "facts grounded in Drive. For a Drive-only brief omit public_sources. Do not add a first-file Google Docs read: discovery has already read "
         "and assessed the actual documents. Every downstream reference to semantic discovery, "
         "including references inside instructions, must use its .sources output. The sources "
         "already include a discovery_coverage entry with real Drive file IDs, folder scope, "
@@ -599,6 +617,19 @@ def validate_source_presentation_plan(prompt: str, plan) -> None:
                      and step.dependency_mode == "all_succeeded"
                      and (not needs_discovery or semantic_content_read(step) or ancestors(step) & folder_reads)}
     semantic_keys = {step.key for step in steps if semantic_content_read(step)}
+    if _external_research_requested(prompt):
+        pages = {s.key for s in steps if s.tool_slug == "aura" and s.operation == "web.page.read"
+                 and not s.optional and s.condition is None and s.dependency_mode == "all_succeeded"}
+        for write in (s for s in steps if s.operation in {"canva.presentation.create", "google-slides.create-presentation"}):
+            composers = [s for s in steps if s.operation == "report.compose" and s.key in ancestors(write)]
+            if not any(pages & ancestors(c) & referenced_step_keys([
+                    c.arguments.get("public_sources"), c.arguments.get("sources")]) for c in composers):
+                raise SourcePresentationPlanError(
+                    "The requested external research needs actual public page evidence in the presentation. "
+                    "Read a relevant public page and bind its text and URL as report.compose public_sources "
+                    "alongside the original Drive sources."
+                )
+
     for step in steps:
         if step.operation in FOLDER_READS:
             continue
