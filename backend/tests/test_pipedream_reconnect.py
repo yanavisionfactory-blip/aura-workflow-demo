@@ -167,12 +167,20 @@ async def test_delete_account_handles_no_content_without_hiding_rejection(broker
     )
 
 
-@pytest.mark.parametrize("sandbox", [False, True])
-async def test_salesforce_connect_selects_instance_and_reconnect_keeps_it(broker, database, sandbox):
+@pytest.mark.parametrize("sandbox,workspace_domain,instance", [
+    (False, None, "production"), (True, None, "sandbox"),
+    (False, "example.my.salesforce.com", "example.my.salesforce.com"),
+    (True, "example.my.salesforce.com", "sandbox"),
+])
+async def test_salesforce_connect_selects_instance_and_reconnect_keeps_it(
+    broker, database, sandbox, workspace_domain, instance,
+):
     config, client = broker
     vendor = "salesforce_rest_api"
     provider = "salesforce-rest-api"
-    instance = "sandbox" if sandbox else "production"
+    config.salesforce_workspace_domains = {"other-workspace": "other.my.salesforce.com"}
+    if workspace_domain:
+        config.salesforce_workspace_domains["workspace"] = workspace_domain
     context = main.TenantContext("workspace", "customer", "owner")
     client.list_actions.return_value = [{
         "key": f"{vendor}-list-records", "version": "1.0", "name": "List records",

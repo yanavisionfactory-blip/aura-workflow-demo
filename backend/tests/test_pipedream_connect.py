@@ -1427,3 +1427,32 @@ def test_salesforce_instance_alternate_forms(field, expected):
     app = {"custom_fields_json": [field]}
     assert [_salesforce_instance_field(app, env)[field["name"]]
             for env in ("production", "sandbox")] == list(expected)
+
+
+
+@pytest.mark.parametrize("field,expected", [
+    ({"name": "yourinstance", "type": "string", "description": "Use login for production and test for sandbox."},
+     {"yourinstance": "acme.my"}),
+    ({"name": "login_hostname", "type": "text", "description": "Company hostname, e.g. acme.my.salesforce.com"},
+     {"login_hostname": "acme.my.salesforce.com"}),
+])
+async def test_company_sign_in_uses_a_project_owned_domain_preset(field, expected):
+    client = PipedreamClient(settings())
+    vendor, host = "salesforce_rest_api", "acme.my.salesforce.com"
+    client.get_app = AsyncMock(return_value={"name_slug": vendor, "custom_fields_json": [field]})
+    row = {"id": "ao_acme", "app": {"name_slug": vendor}, "owner_id": "proj_abc123",
+           "name": f"AURA {vendor} {host}", "cfmap": expected}
+    client._request = AsyncMock(side_effect=[{"data": []}, row])
+    assert await client.salesforce_login_override(vendor, host) == "ao_acme"
+    assert client._request.await_args.kwargs["json"]["cfmap"] == expected
+    client.get_app.return_value["custom_fields_json"] = [{"type": "options", "name": "yourinstance",
+        "options": [{"label": "Production instance", "value": "login"}, {"label": "Sandbox instance", "value": "test"}]}]
+    with pytest.raises(PipedreamConnectError, match="does not offer company sign-in"):
+        await client.salesforce_login_override(vendor, host)
+
+
+@pytest.mark.parametrize("host", ["other.example", "acme.my.salesforce.com.evil.example",
+                                  "acme.my.salesforce.com/path", "https://acme.my.salesforce.com"])
+def test_company_login_configuration_requires_an_exact_salesforce_host(host):
+    with pytest.raises(ValueError):
+        settings(salesforce_workspace_domains={"workspace": host})
