@@ -8,12 +8,14 @@ const API_URL = (import.meta.env.VITE_AURA_API_URL || "").replace(/\/$/, "");
 const WORKSPACE_KEY = "aura_python_workspace_id";
 const ACTIVE_RUN_KEY = "aura_active_python_run_id";
 let tokenProvider = null;
+let signedInEmail = "";
 let workspaceBootstrapPromise = null;
 
 export const pythonRuntimeEnabled = Boolean(API_URL);
 
-export function setAuraTokenProvider(provider) {
+export function setAuraTokenProvider(provider, email = "") {
   tokenProvider = provider;
+  signedInEmail = provider ? email : "";
 }
 
 export function clearWorkspace() {
@@ -217,6 +219,8 @@ export async function createConnectorBrokerSession(provider, connectionId = null
   const query = params.size ? `?${params.toString()}` : "";
   const session = await request(`/v1/connector-broker/${encodeURIComponent(provider)}/session${query}`, {
     method: "POST",
+    ...(provider === "salesforce" && signedInEmail && !connectionId
+      ? { body: JSON.stringify({ login_hint: signedInEmail }) } : {}),
     signal: options.signal,
     timeoutMs: CONNECTION_REQUEST_TIMEOUT_MS,
   });

@@ -7,13 +7,14 @@ import secrets
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Annotated
 from urllib.parse import urlencode, urlsplit
 
 import httpx
 import jwt
 import redis.asyncio as redis
 from agents import Agent, Runner
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import func, select, text, update
@@ -117,7 +118,6 @@ from .models import (
     ToolConnection,
     ToolKind,
     ToolTrustState,
-    UsageProfile,
     WebhookDelivery,
     WebhookSubscription,
     Workflow,
@@ -2179,6 +2179,7 @@ async def create_managed_connector_session(
     context: TenantContext = Depends(tenant_context),
     session: AsyncSession = Depends(tenant_session),
     salesforce_host: SalesforceLoginHost | None = None,
+    login_hint: Annotated[str | None, Body(embed=True, max_length=320)] = None,
 ) -> dict:
     provider = provider.lower()
     if salesforce_host and provider != "salesforce":
@@ -2316,10 +2317,7 @@ async def create_managed_connector_session(
             else:
                 salesforce_options = {}
                 if provider == "salesforce":
-                    profile = None if context.email else await session.get(
-                        UsageProfile, (context.workspace_id, context.subject)
-                    )
-                    email = context.email or (profile.email if profile else None)
+                    email = context.email or login_hint
                     if email:
                         salesforce_options["login_hint"] = email
                     if salesforce_host:
@@ -2765,6 +2763,7 @@ async def create_connector_broker_session(
     session: AsyncSession = Depends(tenant_session),
     salesforce_sandbox: bool = False,
     salesforce_host: SalesforceLoginHost | None = None,
+    login_hint: Annotated[str | None, Body(embed=True, max_length=320)] = None,
 ) -> dict:
     """Select the best connector plane and return only a short-lived browser grant."""
     provider = requested_marketplace_entry(provider)["provider"]
@@ -2912,6 +2911,7 @@ async def create_connector_broker_session(
             context=context,
             session=session,
             **({"salesforce_host": salesforce_host} if salesforce_host else {}),
+            **({"login_hint": login_hint} if provider == "salesforce" and login_hint else {}),
         )
         return {**result, "backend": "nango", "provider": provider}
     if not selected_tool and provider in PROVIDERS and not pipedream_only:
