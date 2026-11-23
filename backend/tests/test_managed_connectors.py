@@ -53,6 +53,32 @@ class FakeNango(NangoClient):
         return self.responses.pop(0)
 
 
+async def test_list_functions_starts_at_zero_and_reads_all_pages():
+    first = [{"name": f"function-{i}"} for i in range(100)]
+    last = [{"name": "last-function"}]
+    client = FakeNango([
+        {"data": first, "pagination": {"page": 0, "limit": 100, "total": 101}},
+        {"data": last, "pagination": {"page": 1, "limit": 100, "total": 101}},
+    ])
+    assert await client.list_functions("salesforce") == first + last
+    assert [call[2]["params"]["page"] for call in client.calls] == [0, 1]
+
+
+async def test_salesforce_preflight_accepts_nango_managed_registration():
+    registration = integration("crm", "salesforce", client_id="", client_secret="")
+    registration["data"]["missing_fields"] = []
+    assert await FakeNango([registration]).preflight("salesforce", "crm") == "crm"
+
+
+@pytest.mark.parametrize("missing", [None, ["oauth_client_id", "oauth_client_secret"]])
+async def test_salesforce_preflight_rejects_unconfirmed_empty_registration(missing):
+    registration = integration("crm", "salesforce", client_id="", client_secret="")
+    if missing is not None:
+        registration["data"]["missing_fields"] = missing
+    with pytest.raises(ConnectorConfigurationError):
+        await FakeNango([registration]).preflight("salesforce", "crm")
+
+
 async def test_connect_session_is_scoped_to_user_and_workspace():
     client = FakeNango([integration(), {"data": {"token": "short", "connect_link": "https://connect"}}])
 
