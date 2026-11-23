@@ -161,6 +161,18 @@ def test_compiler_exposes_only_bounded_nango_transports():
     assert definition["modules"][0]["permission_scope"] == "read"
 
 
+def test_salesforce_signin_uses_the_enabled_catalog_identity_action():
+    action = {"type": "action", "name": "get-current-user", "source": "tools-catalog", "enabled": True}
+    org = {**integration(), "provider": "salesforce", "unique_key": "crm"}
+    modules = compile_nango_definition(org, provider(), [action], settings())["modules"]
+    assert len(modules) == 1
+    assert modules[0]["permission_scope"] == "read"
+    assert modules[0]["transport"] == {"type": "nango_action", "action_name": "get-current-user"}
+    assert modules[0]["output_schema"]["required"] == ["user_id", "organization_id"]
+    with pytest.raises(ValueError, match="no_safe_nango_capabilities"):
+        compile_nango_definition(org, provider(), [{**action, "enabled": False}], settings())
+
+
 def test_compiler_collapses_exact_duplicate_catalog_functions():
     duplicate = sync_function()
     definition = compile_nango_definition(

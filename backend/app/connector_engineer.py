@@ -339,6 +339,20 @@ def _action_capability(
     else:
         scope = "read" if _READ_ACTION.match(raw_name.lower()) else "write"
     input_schema, output_schema = _function_schemas(function)
+    if (provider, raw_name, function.get("source")) == (
+        "salesforce", "get-current-user", "tools-catalog"
+    ):
+        # Pin the catalog action's userinfo contract for the sign-in check. A
+        # successful response must identify both the Salesforce user and org.
+        input_schema = {"type": "object", "additionalProperties": False}
+        output_schema = {
+            "type": "object",
+            "required": ["user_id", "organization_id"],
+            "properties": {
+                "user_id": {"type": "string", "minLength": 1},
+                "organization_id": {"type": "string", "minLength": 1},
+            },
+        }
     canary_input = extension.get("canary_input")
     required = input_schema.get("required") or []
     if scope == "read" and required and not isinstance(canary_input, dict):

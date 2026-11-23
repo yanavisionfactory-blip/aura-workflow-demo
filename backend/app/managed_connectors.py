@@ -111,26 +111,28 @@ class NangoClient:
         return self._data_list(await self._request("GET", "/providers"), "providers")
 
     async def list_functions(self, integration_id: str) -> list[dict]:
-        """Return every deployed sync/action for one exact Nango integration."""
+        """List functions for one integration using Nango's zero-based pages."""
         functions: list[dict] = []
-        page = 1
-        while page <= 20:
+        page_size = 100
+        for page in range(20):
             result = await self._request(
                 "GET",
                 f"/integrations/{quote(integration_id, safe='')}/functions",
-                params={"page": page, "limit": 100},
+                params={"page": page, "limit": page_size},
             )
             batch = self._data_list(result, "functions")
             functions.extend(batch)
             pagination = result.get("pagination") or result.get("meta") or {}
-            has_more = bool(
+            total = pagination.get("total")
+            has_more = (
+                isinstance(total, int) and len(functions) < total
+            ) or bool(
                 result.get("has_more")
                 or pagination.get("has_more")
                 or pagination.get("hasMore")
             )
             if not has_more or not batch:
                 break
-            page += 1
         return functions
 
     def integration_credentials(self, provider: str) -> dict[str, str]:
@@ -331,7 +333,17 @@ class NangoClient:
                 credentials = data.get("credentials")
                 if not isinstance(credentials, dict):
                     raise ConnectorConfigurationError("oauth_credentials_unavailable")
-                validate_oauth_configuration(provider, credentials)
+                # Nango masks both client fields as empty strings for its own app.
+                # Its integration metadata still lists any missing setup fields.
+                managed_salesforce = (
+                    provider == "salesforce"
+                    and credentials.get("type") == "OAUTH2"
+                    and credentials.get("client_id") == ""
+                    and credentials.get("client_secret") == ""
+                    and data.get("missing_fields") == []
+                )
+                if not managed_salesforce:
+                    validate_oauth_configuration(provider, credentials)
                 if provider == "google" and not (
                     _scope_set(credentials.get("scopes")) & GOOGLE_DOC_WRITE_SCOPES
                 ):
