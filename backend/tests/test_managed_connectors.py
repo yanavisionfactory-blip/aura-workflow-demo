@@ -105,7 +105,21 @@ async def test_salesforce_connect_uses_only_its_workspaces_login_host(workspace)
         assert payload["integrations_config_defaults"] == {"crm": {"connection_config": {
             "hostname": "company.my.salesforce.com"}}}
     else:
-        assert "integrations_config_defaults" not in payload
+        assert payload["integrations_config_defaults"] == {"crm": {"connection_config": {
+            "hostname": "login.salesforce.com"}}}
+
+
+async def test_two_company_links_never_share_a_salesforce_session():
+    def grant(company):
+        return [integration("crm", "salesforce"), {"data": {"connect_link": f"https://connect/{company}"}}]
+
+    client = FakeNango(grant("first") + grant("second"), config=dynamic_settings())
+    for company in ["first", "second"]:
+        host = f"{company}.my.salesforce.com"
+        result = await client.create_session("salesforce", "workspace", "user",
+                                             integration_id="crm", salesforce_host=host)
+        assert result["connect_link"] == f"https://connect/{company}"
+        assert client.calls[-1][2]["json"]["integrations_config_defaults"]["crm"]["connection_config"]["hostname"] == host
 
 
 def test_api_key_enables_managed_connections_without_static_map():

@@ -213,6 +213,7 @@ export async function createConnectorBrokerSession(provider, connectionId = null
   const params = new URLSearchParams();
   if (connectionId) params.set("connection_id", connectionId);
   if (options.salesforceSandbox) params.set("salesforce_sandbox", "true");
+  if (options.salesforceHost) params.set("salesforce_host", options.salesforceHost);
   const query = params.size ? `?${params.toString()}` : "";
   const session = await request(`/v1/connector-broker/${encodeURIComponent(provider)}/session${query}`, {
     method: "POST",
@@ -540,13 +541,13 @@ async function authorizePipedreamConnector(provider, session, timeoutMs, control
 
 export async function authorizeConnectorBroker(
   provider,
-  { connection = null, timeoutMs = null, reservedWindow = null, sameTab = false, signal, onProgress, salesforceSandbox = false } = {},
+  { connection = null, timeoutMs = null, reservedWindow = null, sameTab = false, signal, onProgress, salesforceSandbox = false, salesforceHost } = {},
 ) {
   if (signal?.aborted) throw signal.reason;
   onProgress?.({ phase: "preparing" });
   let session;
   try {
-    session = await createConnectorBrokerSession(provider, connection?.id || null, { signal, salesforceSandbox });
+    session = await createConnectorBrokerSession(provider, connection?.id || null, { signal, salesforceSandbox, salesforceHost });
     if (signal?.aborted) throw signal.reason;
   } catch (error) {
     if (reservedWindow && !reservedWindow.closed) reservedWindow.close();

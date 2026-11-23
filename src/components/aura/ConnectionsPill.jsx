@@ -37,6 +37,7 @@ import {
   subscribeDocuments,
 } from "@/lib/documentStore";
 import { listAgentConnections, requestManagedConnector, searchConnectorBrokerApps } from "@/lib/auraApi";
+import { salesforceLoginHost } from "@/lib/salesforceLogin.mjs";
 import {
   CATALOG,
   catalogEntryFor,
@@ -60,6 +61,7 @@ export default function ConnectionsPill() {
   const [query, setQuery] = useState(appPreset?.query || "");
   const [catalogRevision, setCatalogRevision] = useState(0);
   const [connecting, setConnecting] = useState(null);
+  const [salesforceLink, setSalesforceLink] = useState(null);
   const [importNotice, setImportNotice] = useState("");
   const [requesting, setRequesting] = useState(null);
   const [searchingCatalog, setSearchingCatalog] = useState(false);
@@ -167,13 +169,13 @@ export default function ConnectionsPill() {
   const count = connectedTools.length + agentCards.length;
   const stacked = [...connectedTools, ...agentCards].slice(0, 4);
 
-  const connect = async (tool, inputMode, { salesforceSandbox = false } = {}) => {
+  const connect = async (tool, inputMode, { salesforceSandbox = false, salesforceHost } = {}) => {
     if ((isMetaConnection(tool) && !connectionsLoaded) || !tool.connectable
       || (inputMode !== "upload" && (tool.connectionId || (tool.isConnected ?? connected[tool.name])))) return;
     setConnecting(tool.rowKey || tool.name);
     setError("");
     try {
-      const result = await connectTool(tool.name, { provider: tool.provider, inputMode, salesforceSandbox });
+      const result = await connectTool(tool.name, { provider: tool.provider, inputMode, salesforceSandbox, salesforceHost });
       if (result.inputAttached) {
         setImportNotice(`${result.document.name} is ready for your next workflow. This is an imported snapshot, not a live app connection.`);
         setTab("documents");
@@ -454,6 +456,28 @@ export default function ConnectionsPill() {
                                   className="rounded-lg px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50">
                                   Use a test account
                                 </button>
+                              )}
+                              {tool.provider === "salesforce" && tool.connectionBackend === "nango" && (
+                                salesforceLink === null ? (
+                                  <button type="button" onClick={() => setSalesforceLink("")} disabled={Boolean(connecting)}
+                                    className="rounded-lg px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground">Use company link</button>
+                                ) : (
+                                  <form className="mt-1 flex flex-wrap items-center justify-end gap-1" onSubmit={(event) => {
+                                    event.preventDefault();
+                                    const host = salesforceLoginHost(salesforceLink);
+                                    if (!host) { setError("Enter a Salesforce company link."); return; }
+                                    setSalesforceLink(null);
+                                    connect(tool, undefined, { salesforceHost: host });
+                                  }}>
+                                    <input autoFocus aria-label="Salesforce company link" placeholder="Salesforce company link"
+                                      value={salesforceLink} onChange={(event) => setSalesforceLink(event.target.value)}
+                                      className="min-w-0 w-40 rounded-md border border-white/20 bg-background px-2 py-1 text-xs" />
+                                    <button type="submit" disabled={!salesforceLink.trim() || Boolean(connecting)}
+                                      className="px-2 py-1 text-xs text-primary disabled:opacity-50">Continue</button>
+                                    <button type="button" onClick={() => setSalesforceLink(null)}
+                                      className="px-2 py-1 text-xs text-muted-foreground">Cancel</button>
+                                  </form>
+                                )
                               )}
                             </div>
                           ) : (

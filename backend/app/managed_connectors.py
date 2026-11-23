@@ -394,8 +394,13 @@ class NangoClient:
         subject: str,
         *,
         integration_id: str | None = None,
+        salesforce_host: str | None = None,
     ) -> dict:
-        hostname = self.settings.salesforce_workspace_domains.get(workspace_id) if provider == "salesforce" else None
+        hostname = None
+        if provider == "salesforce":
+            hostname = salesforce_host or self.settings.salesforce_workspace_domains.get(
+                workspace_id, "login.salesforce.com"
+            )
 
         async def create() -> dict:
             resolved_id = await self.preflight(provider, integration_id)

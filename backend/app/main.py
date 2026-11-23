@@ -44,7 +44,7 @@ from .autonomous_delivery import (
     reset_read_attempt_cycle,
 )
 from .chatgpt_mcp import install_chatgpt_mcp
-from .config import get_settings
+from .config import SalesforceLoginHost, get_settings
 from .connector_engineer import (
     certify_verified_reads,
     connector_engineer_loop,
@@ -1621,8 +1621,7 @@ async def managed_connector_status(
     dynamic_catalog = [
         {
             **release_descriptor(release),
-            "preferred_connection": (release.provider_slug == "salesforce"
-                                     and context.workspace_id in settings.salesforce_workspace_domains),
+            "preferred_connection": release.provider_slug == "salesforce",
             "source": "connector_engineer",
             "connection_backend": "nango",
             "availability": "available",
@@ -1858,8 +1857,7 @@ async def search_connector_broker_apps(
                 continue
             item = {
                 **release_descriptor(release),
-                "preferred_connection": (release.provider_slug == "salesforce"
-                                         and context.workspace_id in settings.salesforce_workspace_domains),
+                "preferred_connection": release.provider_slug == "salesforce",
                 "availability": "available",
                 "connectable": True,
                 "eligible_for_one_click": True,
@@ -2177,8 +2175,11 @@ async def create_managed_connector_session(
     external_connection_id: str | None = None,
     context: TenantContext = Depends(tenant_context),
     session: AsyncSession = Depends(tenant_session),
+    salesforce_host: SalesforceLoginHost | None = None,
 ) -> dict:
     provider = provider.lower()
+    if salesforce_host and provider != "salesforce":
+        raise HTTPException(422, "Company sign-in is available only for Salesforce")
     release = None if provider in PROVIDERS else await released_connector(session, provider)
     if provider not in PROVIDERS and not release:
         raise HTTPException(404, "Unknown app")
@@ -2314,6 +2315,7 @@ async def create_managed_connector_session(
                     provider,
                     context.workspace_id,
                     context.subject,
+                    **({"salesforce_host": salesforce_host} if salesforce_host else {}),
                     **(
                         {"integration_id": release_integration_id} if release_integration_id else {}
                     ),
@@ -2749,10 +2751,13 @@ async def create_connector_broker_session(
     context: TenantContext = Depends(tenant_context),
     session: AsyncSession = Depends(tenant_session),
     salesforce_sandbox: bool = False,
+    salesforce_host: SalesforceLoginHost | None = None,
 ) -> dict:
     """Select the best connector plane and return only a short-lived browser grant."""
     provider = requested_marketplace_entry(provider)["provider"]
     provider = wordpress_plugins.provider_slug(provider)
+    if salesforce_host and (provider != "salesforce" or salesforce_sandbox or connection_id):
+        raise HTTPException(422, "Use a company link when connecting a new Salesforce account")
     if salesforce_sandbox and not is_salesforce_app(provider):
         raise HTTPException(422, "Test account sign-in is available only for Salesforce")
     from . import desktop_estimating
@@ -2843,8 +2848,9 @@ async def create_connector_broker_session(
     # New Salesforce and Google sign-ins prefer their released managed app.
     # Reconnects stay pinned to the backend that owns the account.
     nango_release = None if provider in PROVIDERS else await released_connector(session, provider)
-    company_signin = (provider == "salesforce" and context.workspace_id in settings.salesforce_workspace_domains
-                      and nango.configured and nango_release is not None)
+    company_signin = provider == "salesforce" and nango.configured and nango_release is not None
+    if salesforce_host and (not company_signin or selected_backend == "pipedream"):
+        raise HTTPException(409, "Company sign-in is unavailable for this connection")
     preferred_pipedream = bool(
         not selected_tool and not company_signin and (provider in PUBLIC_GOOGLE_CONNECTORS or is_salesforce_app(provider))
         and pipedream_client().configured
@@ -2892,6 +2898,7 @@ async def create_connector_broker_session(
             external_connection_id=None,
             context=context,
             session=session,
+            **({"salesforce_host": salesforce_host} if salesforce_host else {}),
         )
         return {**result, "backend": "nango", "provider": provider}
     if not selected_tool and provider in PROVIDERS and not pipedream_only:
