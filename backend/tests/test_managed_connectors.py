@@ -105,7 +105,40 @@ async def test_salesforce_connect_uses_only_its_workspaces_login_host(workspace)
         assert payload["integrations_config_defaults"] == {"crm": {"connection_config": {
             "hostname": "company.my.salesforce.com"}}}
     else:
-        assert "integrations_config_defaults" not in payload
+        assert payload["integrations_config_defaults"] == {"crm": {"connection_config": {
+            "hostname": "login.salesforce.com"}}}
+
+
+async def test_two_company_links_never_share_a_salesforce_session():
+    def grant(company):
+        return [integration("crm", "salesforce"), {"data": {"connect_link": f"https://connect/{company}"}}]
+
+    client = FakeNango(grant("first") + grant("second"), config=dynamic_settings())
+    for company in ["first", "second"]:
+        host = f"{company}.my.salesforce.com"
+        result = await client.create_session("salesforce", "workspace", "user",
+                                             integration_id="crm", salesforce_host=host)
+        assert result["connect_link"] == f"https://connect/{company}"
+        assert client.calls[-1][2]["json"]["integrations_config_defaults"]["crm"]["connection_config"]["hostname"] == host
+
+
+async def test_salesforce_users_authorize_with_their_own_email_and_session():
+    from urllib.parse import parse_qs, urlsplit
+
+    replies = []
+    for tag in ["one", "two"]:
+        replies.extend([integration("crm", "salesforce"), {"data": {"token": tag, "connect_link": "https://connect"}}])
+    client = FakeNango(replies, config=dynamic_settings())
+    for subject in ["one", "two"]:
+        email = f"{subject}@example.org"
+        grant = await client.create_session("salesforce", "workspace", subject, integration_id="crm", login_hint=email)
+        payload = client.calls[-1][2]["json"]
+        assert payload["tags"]["end_user_id"] == subject
+        assert payload["integrations_config_defaults"]["crm"]["authorization_params"] == {"login_hint": email}
+        url = urlsplit(grant["connect_link"])
+        assert url.hostname == urlsplit(client.base_url).hostname
+        assert url.path == "/oauth/connect/crm"
+        assert parse_qs(url.query) == {"connect_session_token": [subject]}
 
 
 def test_api_key_enables_managed_connections_without_static_map():

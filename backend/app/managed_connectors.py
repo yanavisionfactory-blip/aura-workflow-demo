@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable
 from functools import lru_cache
 from time import monotonic
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import httpx
 
@@ -394,8 +394,18 @@ class NangoClient:
         subject: str,
         *,
         integration_id: str | None = None,
+        salesforce_host: str | None = None,
+        login_hint: str | None = None,
     ) -> dict:
-        hostname = self.settings.salesforce_workspace_domains.get(workspace_id) if provider == "salesforce" else None
+        hostname = None
+        email = ""
+        if provider == "salesforce":
+            hostname = salesforce_host or self.settings.salesforce_workspace_domains.get(
+                workspace_id, "login.salesforce.com"
+            )
+            hint = (login_hint or "").strip()
+            if len(hint) <= 320 and re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", hint):
+                email = hint
 
         async def create() -> dict:
             resolved_id = await self.preflight(provider, integration_id)
@@ -408,12 +418,21 @@ class NangoClient:
                 },
             }
             if hostname:
-                payload["integrations_config_defaults"] = {resolved_id: {"connection_config": {"hostname": hostname}}}
+                defaults = {"connection_config": {"hostname": hostname}}
+                if email:
+                    defaults["authorization_params"] = {"login_hint": email}
+                payload["integrations_config_defaults"] = {resolved_id: defaults}
             result = await self._request("POST", "/connect/sessions", json=payload)
-            return result.get("data", result)
+            data = result.get("data", result)
+            if hostname and data.get("token"):
+                # Use Nango's OAuth start endpoint in AURA's existing popup.
+                # AURA already verifies completion by polling the scoped grant.
+                params = urlencode({"connect_session_token": data["token"]})
+                data = {**data, "connect_link": f"{self.base_url}/oauth/connect/{quote(resolved_id, safe='')}?{params}"}
+            return data
 
         return await self._cached_authorization_session(
-            (provider, workspace_id, subject, "new", integration_id or "", hostname or ""), create
+            (provider, workspace_id, subject, "new", integration_id or "", hostname or "", email), create
         )
 
     async def create_reconnect_session(

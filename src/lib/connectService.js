@@ -129,6 +129,7 @@ async function connectToolAttempt(toolName, opts) {
       signal: opts.signal,
       onProgress: opts.onProgress,
       salesforceSandbox: opts.salesforceSandbox,
+      salesforceHost: opts.salesforceHost,
     });
 
     if (result.redirecting) {

@@ -29,10 +29,13 @@ export const AuthProvider = ({ children }) => {
   const [isLoadingWorkspace, setIsLoadingWorkspace] = useState(false);
   const [reconnectSequence, setReconnectSequence] = useState(0);
 
+  const loginEmail = clerk.isSignedIn && user?.id === clerk.userId
+    && user?.primaryEmailAddress?.verification?.status === "verified"
+    ? user.primaryEmailAddress.emailAddress : "";
   useLayoutEffect(() => {
-    setAuraTokenProvider((options) => clerk.getToken(options));
+    setAuraTokenProvider((options) => clerk.getToken(options), loginEmail);
     return () => setAuraTokenProvider(null);
-  }, [clerk.getToken]);
+  }, [clerk.getToken, loginEmail]);
 
   const refreshWorkspaces = useCallback(async () => {
     if (!clerk.isSignedIn || !clerk.isLoaded) return [];

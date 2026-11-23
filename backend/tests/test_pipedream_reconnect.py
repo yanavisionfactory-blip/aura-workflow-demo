@@ -231,7 +231,8 @@ async def test_salesforce_connect_selects_instance_and_reconnect_keeps_it(
 
 
 
-async def test_company_salesforce_connect_uses_released_domain_aware_route(broker, database, monkeypatch):
+@pytest.mark.parametrize("workspace", ["workspace", "new-company"])
+async def test_company_salesforce_connect_uses_released_domain_aware_route(broker, database, monkeypatch, workspace):
     config, _ = broker
     config.salesforce_workspace_domains = {"workspace": "example.my.salesforce.com"}
     monkeypatch.setattr(main, "managed_connector_client", lambda: SimpleNamespace(configured=True))
@@ -241,7 +242,7 @@ async def test_company_salesforce_connect_uses_released_domain_aware_route(broke
     public = AsyncMock(return_value=True)
     monkeypatch.setattr(main, "released_pipedream_pack", public)
     async with database() as session:
-        context = main.TenantContext("workspace", "user", "owner")
+        context = main.TenantContext(workspace, "user", "owner")
         result = await main.create_connector_broker_session("salesforce", context=context, session=session)
         assert result["backend"] == "nango"
         assert managed.await_args.kwargs["provider"] == "salesforce"
