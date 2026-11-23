@@ -117,6 +117,7 @@ from .models import (
     ToolConnection,
     ToolKind,
     ToolTrustState,
+    UsageProfile,
     WebhookDelivery,
     WebhookSubscription,
     Workflow,
@@ -361,6 +362,7 @@ class TenantContext:
     subject: str
     role: str
     session_id: str | None = None
+    email: str | None = None
 
 
 def _bearer_token(authorization: str | None) -> str | None:
@@ -394,6 +396,7 @@ async def tenant_context(
             subject=claims["sub"],
             role="member",
             session_id=claims.get("sid"),
+            email=claims.get("email") if isinstance(claims.get("email"), str) else None,
         )
     if not settings.allow_legacy_workspace_tokens:
         raise HTTPException(401, "Sign in is required")
@@ -2311,11 +2314,21 @@ async def create_managed_connector_session(
                         }
                     )
             else:
+                salesforce_options = {}
+                if provider == "salesforce":
+                    profile = None if context.email else await session.get(
+                        UsageProfile, (context.workspace_id, context.subject)
+                    )
+                    email = context.email or (profile.email if profile else None)
+                    if email:
+                        salesforce_options["login_hint"] = email
+                    if salesforce_host:
+                        salesforce_options["salesforce_host"] = salesforce_host
                 result = await client.create_session(
                     provider,
                     context.workspace_id,
                     context.subject,
-                    **({"salesforce_host": salesforce_host} if salesforce_host else {}),
+                    **salesforce_options,
                     **(
                         {"integration_id": release_integration_id} if release_integration_id else {}
                     ),
