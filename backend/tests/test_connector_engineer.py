@@ -1,5 +1,6 @@
 import logging
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from sqlalchemy import select
@@ -14,6 +15,8 @@ from app.connector_engineer import (
     release_signature_valid,
     released_connectors,
     requested_marketplace_entry,
+    sign_release,
+    verify_released_connection,
 )
 from app.db import Base
 from app.managed_connectors import ManagedConnectorError, NangoClient
@@ -171,6 +174,82 @@ def test_salesforce_signin_uses_the_enabled_catalog_identity_action():
     assert modules[0]["output_schema"]["required"] == ["user_id", "organization_id"]
     with pytest.raises(ValueError, match="no_safe_nango_capabilities"):
         compile_nango_definition(org, provider(), [{**action, "enabled": False}], settings())
+
+
+@pytest.fixture
+async def salesforce_release(release_session, monkeypatch):
+    from app import connector_engineer
+
+    config = settings()
+    monkeypatch.setattr(connector_engineer, "get_settings", lambda: config)
+    action = {"type": "action", "name": "get-current-user", "source": "tools-catalog",
+              "enabled": True, "scopes": ["openid"]}
+    definition = compile_nango_definition(
+        {"provider": "salesforce", "unique_key": "crm"}, provider(), [action], config
+    )
+    validated, digest, evidence = isolate_definition(definition, config)
+    assert evidence.passed
+    release = ManagedConnectorRelease(provider_slug="salesforce", integration_id="crm",
+                                      display_name="Salesforce", status="released", version=1,
+                                      definition=validated, definition_hash=digest)
+    release.signature = sign_release(release, config)
+    release_session.add(release)
+    await release_session.commit()
+    return release
+
+
+async def test_salesforce_approved_grant_finishes_in_its_workspace(release_session, salesforce_release, monkeypatch):
+    from app import main
+
+    client = SimpleNamespace(
+        configured=True,
+        find_connections=AsyncMock(), find_connection=AsyncMock(), execute_capability=AsyncMock(),
+        clear_authorization_sessions=Mock(),
+    )
+    monkeypatch.setattr(main, "managed_connector_client", lambda: client)
+    for user in ("alice", "bob"):
+        context = main.TenantContext(f"workspace-{user}", user, "owner")
+        release_session.add(Workspace(id=context.workspace_id, name=context.workspace_id))
+        await release_session.commit()
+        grant = {"connection_id": f"grant-{user}", "errors": []}
+        client.find_connections.return_value = [grant]
+        client.find_connection.return_value = grant
+        client.execute_capability.return_value = {"user_id": user, "organization_id": f"org-{user}"}
+        # The broker can recover a completed provider grant after the popup closes.
+        prepared = await main.create_managed_connector_session(
+            "salesforce", context=context, session=release_session
+        )
+        assert prepared["mode"] == "reuse"
+        saved = await main.sync_managed_connector(
+            "salesforce", external_connection_id=prepared["external_connection_id"],
+            context=context, session=release_session,
+        )
+        assert saved["connected"] and saved["external_account_id"] == user
+        checked = await main.test_connection(saved["tool_id"], context=context, session=release_session)
+        assert checked["status"] == "verified"
+        assert checked["verification"]["allowed_operations"] == ["salesforce.get-current-user"]
+        assert checked["verification"]["identity"] == client.execute_capability.return_value
+        client.find_connection.assert_awaited_with(
+            "salesforce", context.workspace_id, user, grant["connection_id"],
+            include_errors=True, integration_id=salesforce_release.integration_id,
+        )
+
+
+async def test_incomplete_salesforce_identity_does_not_restart_signin(release_session, salesforce_release, monkeypatch):
+    from fastapi import HTTPException
+    from app import main
+
+    connection = {"connection_id": "grant", "errors": []}
+    client = SimpleNamespace(find_connections=AsyncMock(return_value=[connection]),
+                             execute_capability=AsyncMock(return_value={"user_id": "user"}))
+    monkeypatch.setattr(main, "managed_connector_client", lambda: client)
+    result = await verify_released_connection(client, salesforce_release, connection)
+    assert result == {"ok": False, "reason": "salesforce_identity_unverified", "retryable": True}
+    with pytest.raises(HTTPException) as error:
+        await main.create_managed_connector_session(
+            "salesforce", context=main.TenantContext("workspace", "user", "owner"), session=release_session
+        )
+    assert error.value.status_code == 503
 
 
 def test_compiler_collapses_exact_duplicate_catalog_functions():

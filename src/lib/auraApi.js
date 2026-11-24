@@ -309,6 +309,7 @@ async function waitForManagedConnector(provider, timeoutMs, popup, preparedSessi
   const startedAt = Date.now();
   let closedAt = null;
   let failures = 0;
+  let verifyingSalesforce = false;
   reportConsentWindow(controls, popup);
   while (Date.now() - startedAt < timeoutMs) {
     await connectionPollDelay(signal, Date.now() - startedAt < 30_000 ? 2000 : 5000);
@@ -340,7 +341,11 @@ async function waitForManagedConnector(provider, timeoutMs, popup, preparedSessi
       }
       throw new Error("The app has not granted the access this plan needs. Please reconnect and approve the requested access.");
     }
-    if (popup.closed) {
+    if (provider === "salesforce" && result?.status === "verification_pending" && !verifyingSalesforce) {
+      verifyingSalesforce = true;
+      controls.onProgress?.({ phase: "verifying" });
+    }
+    if (popup.closed && !verifyingSalesforce) {
       closedAt ||= Date.now();
       if (Date.now() - closedAt > 10000) {
         throw new Error("The app did not finish connecting. AURA kept your plan unchanged.");
@@ -556,6 +561,14 @@ export async function authorizeConnectorBroker(
   } catch (error) {
     if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
     throw error;
+  }
+  if (provider === "salesforce" && session.backend === "nango" && session.mode === "reuse"
+      && session.already_connected && session.external_connection_id && !session.connection_id) {
+    if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
+    onProgress?.({ phase: "verifying" });
+    const saved = await syncManagedConnector(provider, { externalConnectionId: session.external_connection_id }, { signal });
+    if (!saved.connected || !saved.tool_id) throw new Error("AURA could not yet verify your Salesforce connection.");
+    session = { ...session, connection_id: saved.tool_id };
   }
   if (session.already_connected && session.connection_id) {
     if (reservedWindow && !reservedWindow.closed) reservedWindow.close();

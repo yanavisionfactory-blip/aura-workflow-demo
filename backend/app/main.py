@@ -2296,6 +2296,8 @@ async def create_managed_connector_session(
                         "external_connection_id": existing.get("connection_id"),
                         "integration_id": integration_id,
                     }
+                elif provider == "salesforce" and verification.get("retryable"):
+                    raise HTTPException(503, "Salesforce sign-in is complete. Account verification is temporarily unavailable.")
                 else:
                     result = await client.create_reconnect_session(
                         provider,

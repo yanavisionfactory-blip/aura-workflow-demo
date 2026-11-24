@@ -634,6 +634,13 @@ async def _canary_operation(
     capabilities_by_name: dict[str, dict[str, Any]],
 ) -> CanaryOperationEvidence:
     operation = capability["name"]
+    if _is_salesforce_identity(release, capability):
+        verification = await _verify_salesforce_identity(client, release, connection_id, capability)
+        logger.info("salesforce_signin_canary verified=%s", verification["ok"])
+        return CanaryOperationEvidence(
+            operation=operation, passed=verification["ok"], scenario="verify_signin",
+            reason_code=verification.get("reason"),
+        )
     try:
         result = await client.execute_capability(
             release.integration_id,
@@ -1444,6 +1451,48 @@ def _granted_scopes(credentials: dict[str, Any]) -> set[str] | None:
     return None
 
 
+def _is_salesforce_identity(release: ManagedConnectorRelease, capability: dict) -> bool:
+    return (
+        release.provider_slug == "salesforce"
+        and capability.get("permission_scope") == "read"
+        and capability.get("transport") == {"type": "nango_action", "action_name": "get-current-user"}
+    )
+
+
+async def _verify_salesforce_identity(
+    client: NangoClient, release: ManagedConnectorRelease, connection_id: str, capability: dict
+) -> dict:
+    # Nango can use the grant even when its API does not return a raw token.
+    # Ask Salesforce who authorized this exact connection before certifying it.
+    try:
+        identity = await client.execute_capability(
+            release.integration_id, connection_id, capability, {}
+        )
+    except ManagedConnectorError as exc:
+        return {
+            "ok": False,
+            "reason": "provider_temporarily_unavailable" if exc.retryable else "authorization_required",
+            "retryable": exc.retryable,
+        }
+    keys = ("user_id", "organization_id")
+    if not (
+        isinstance(identity, dict)
+        and all(isinstance(identity.get(key), str) and identity[key].strip() for key in keys)
+        and Draft202012Validator(capability["output_schema"]).is_valid(identity)
+    ):
+        return {"ok": False, "reason": "salesforce_identity_unverified", "retryable": True}
+    return {
+        "ok": True,
+        "reason": None,
+        "identity": {key: identity[key] for key in keys},
+        "allowed_operations": [capability["name"]],
+        "certified_read_operations": [capability["name"]],
+        "scope_verification": "provider_identity_confirmed",
+        "release_id": release.id,
+        "release_hash": release.definition_hash,
+    }
+
+
 async def verify_released_connection(
     client: NangoClient,
     release: ManagedConnectorRelease,
@@ -1455,6 +1504,23 @@ async def verify_released_connection(
     connection_id = str(connection.get("connection_id") or "").strip()
     if not connection_id or connection.get("errors"):
         return {"ok": False, "reason": "authorization_required"}
+    capabilities = release.definition.get("manifest", {}).get("capabilities", [])
+    identity_capability = next((item for item in capabilities if _is_salesforce_identity(release, item)), None)
+    if identity_capability:
+        verified = await _verify_salesforce_identity(client, release, connection_id, identity_capability)
+        others = [item for item in capabilities if item is not identity_capability]
+        if verified["ok"] and others:
+            additional = await _verify_released_capabilities(client, release, connection, others)
+            verified["allowed_operations"].extend(additional.get("allowed_operations", []))
+            verified["certified_read_operations"].extend(additional.get("certified_read_operations", []))
+        return verified
+    return await _verify_released_capabilities(client, release, connection, capabilities)
+
+
+async def _verify_released_capabilities(
+    client: NangoClient, release: ManagedConnectorRelease, connection: dict, capabilities: list[dict]
+) -> dict:
+    connection_id = str(connection["connection_id"]).strip()
     try:
         credentials = await client.get_credentials(connection_id, release.integration_id)
     except ManagedConnectorError as exc:
@@ -1468,7 +1534,6 @@ async def verify_released_connection(
     if not credentials.get("access_token"):
         return {"ok": False, "reason": "missing_access_token", "retryable": True}
     granted = _granted_scopes(credentials)
-    capabilities = release.definition.get("manifest", {}).get("capabilities", [])
     eligible: list[dict[str, Any]] = []
     allowed_writes: list[str] = []
     for capability in capabilities:
