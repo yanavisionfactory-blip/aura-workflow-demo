@@ -377,6 +377,58 @@ test("a managed retry verifies Google access without reading the cross-origin po
   assert.equal(saved.get("aura_active_python_run_id"), "saved-run");
 });
 
+test("returning to an approved Salesforce grant finishes without reopening sign-in", async () => {
+  setup();
+  globalThis.window = popupBrowser();
+  const tool = { id: "saved-crm", slug: "salesforce", enabled: true };
+  const seen = [];
+  globalThis.fetch = async (url) => {
+    const { pathname, searchParams } = new URL(url);
+    seen.push(pathname);
+    if (pathname.endsWith("/salesforce/session")) return Response.json({
+      backend: "nango", mode: "reuse", already_connected: true, external_connection_id: "my-grant",
+    });
+    if (pathname.endsWith("/salesforce/sync")) {
+      assert.equal(searchParams.get("external_connection_id"), "my-grant");
+      return Response.json({ connected: true, tool_id: tool.id });
+    }
+    if (pathname === "/v1/tools") return Response.json([tool]);
+    throw new Error(`Unexpected request: ${pathname}`);
+  };
+  const result = await flow.authorizeConnectorBroker("salesforce");
+  assert.equal(result.tool.id, tool.id);
+  assert.equal(result.connected, true);
+  assert.equal(window.popups.length, 0);
+  assert.deepEqual(seen, ["/v1/connector-broker/salesforce/session", "/v1/managed-connectors/salesforce/sync", "/v1/tools"]);
+});
+
+test("closing Salesforce after approval keeps verification running", async (t) => {
+  setup();
+  globalThis.window = popupBrowser();
+  const popup = flow.reserveAuthorizationWindow("salesforce");
+  let time = Date.now();
+  t.mock.method(Date, "now", () => time);
+  let polls = 0;
+  const tool = { id: "saved-crm", slug: "salesforce" };
+  globalThis.fetch = async (url) => {
+    const { pathname } = new URL(url);
+    if (pathname.endsWith("/salesforce/sync")) {
+      popup.close();
+      time += 6500;
+      if (++polls <= 3) return Response.json({ connected: false, status: "verification_pending" });
+      return Response.json({ connected: true, tool_id: tool.id });
+    }
+    if (pathname.endsWith("/test")) return Response.json({ status: "verified", verification: { ok: true } });
+    if (pathname === "/v1/tools") return Response.json([tool]);
+    throw new Error(`Unexpected request: ${pathname}`);
+  };
+  const result = await flow.authorizeManagedConnector("salesforce", 60000, popup, {
+    connect_link: "https://connect.example.invalid/salesforce",
+  });
+  assert.equal(result.connected, true);
+  assert.equal(polls, 4);
+});
+
 test("native authorization navigates a cross-origin popup and waits for the provider callback", async () => {
   setup();
   globalThis.window = popupBrowser();
