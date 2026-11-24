@@ -804,7 +804,13 @@ async def _rollback_release(
 
 
 def _canary_due(release: ManagedConnectorRelease, settings: Settings) -> bool:
-    checked = (release.evidence or {}).get("canary", {}).get("checked_at")
+    canary = (release.evidence or {}).get("canary", {})
+    capabilities = release.definition.get("manifest", {}).get("capabilities", [])
+    if any(_is_salesforce_identity(release, cap) for cap in capabilities) and not any(
+        item.get("scenario") == "verify_signin" for item in canary.get("operations", [])
+    ):
+        return True
+    checked = canary.get("checked_at")
     if not checked:
         return True
     try:

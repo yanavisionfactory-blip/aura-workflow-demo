@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.config import Settings
 from app.connector_engineer import (
+    _canary_due,
     canary_release,
     compile_nango_definition,
     discovered_marketplace,
@@ -250,6 +251,11 @@ async def test_incomplete_salesforce_identity_does_not_restart_signin(release_se
     canary = await canary_release(client, salesforce_release, "test-grant", settings())
     assert not canary.passed
     assert canary.operations[0].reason_code == result["reason"]
+    salesforce_release.evidence = {"canary": {"checked_at": canary.checked_at,
+                                              "operations": [{"scenario": "execute"}]}}
+    assert _canary_due(salesforce_release, settings())
+    salesforce_release.evidence = {"canary": canary.model_dump()}
+    assert not _canary_due(salesforce_release, settings())
     with pytest.raises(HTTPException) as error:
         await main.create_managed_connector_session(
             "salesforce", context=main.TenantContext("workspace", "user", "owner"), session=release_session
