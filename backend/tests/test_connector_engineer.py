@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.config import Settings
 from app.connector_engineer import (
+    canary_release,
     compile_nango_definition,
     discovered_marketplace,
     engineer_nango_catalog,
@@ -237,6 +238,7 @@ async def test_salesforce_approved_grant_finishes_in_its_workspace(release_sessi
 
 async def test_incomplete_salesforce_identity_does_not_restart_signin(release_session, salesforce_release, monkeypatch):
     from fastapi import HTTPException
+
     from app import main
 
     connection = {"connection_id": "grant", "errors": []}
@@ -245,6 +247,9 @@ async def test_incomplete_salesforce_identity_does_not_restart_signin(release_se
     monkeypatch.setattr(main, "managed_connector_client", lambda: client)
     result = await verify_released_connection(client, salesforce_release, connection)
     assert result == {"ok": False, "reason": "salesforce_identity_unverified", "retryable": True}
+    canary = await canary_release(client, salesforce_release, "test-grant", settings())
+    assert not canary.passed
+    assert canary.operations[0].reason_code == result["reason"]
     with pytest.raises(HTTPException) as error:
         await main.create_managed_connector_session(
             "salesforce", context=main.TenantContext("workspace", "user", "owner"), session=release_session
