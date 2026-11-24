@@ -53,6 +53,18 @@ async function copy(text, message) {
 }
 $('#copy-prompt').addEventListener('click', () => copy(prompt.value, 'Prompt copied. This does not start a run.'));
 $('#copy-launch').addEventListener('click', () => {
+  const checks = [
+    ['#browser-ready', 'Open a browser-capable ChatGPT Work session first. Ordinary chat cannot execute this review.'],
+    ['#accounts-ready', 'Sign in to your own AURA and Frame.io accounts in the execution browser and verify the video and native assistant.'],
+    ['#tools-ready', 'Ask the browser agent to discover AURA WebMCP tools. If unavailable, contact the pilot operator.']
+  ];
+  for (const [selector, message] of checks) {
+    if (!$(selector).checked) {
+      $(selector).focus();
+      $('#launch-status').textContent = 'Not started — ' + message;
+      return;
+    }
+  }
   if (!normalizeAssetUrl(asset.value)) {
     asset.setAttribute('aria-invalid', 'true'); asset.focus();
     $('#launch-status').textContent = 'Add your exact Frame.io asset URL first: https://app.frame.io/project/PROJECT_UUID/view/FILE_UUID'; return;
@@ -61,7 +73,7 @@ $('#copy-launch').addEventListener('click', () => {
     prompt.focus(); $('#launch-status').textContent = 'Use a review prompt between 20 and 6,000 characters.'; return;
   }
   updateLaunch();
-  copy($('#launch-request').value, 'Launch request copied. Paste it into ChatGPT with browser access to start a new AURA workflow.');
+  copy($('#launch-request').value, 'Launch request copied, not started. Paste it into the verified browser-capable session; wait for the new saved AURA result link.');
 });
 $('#show-screen').addEventListener('click', () => $('#screen-dialog').showModal());
 $('#close-screen').addEventListener('click', () => $('#screen-dialog').close());
